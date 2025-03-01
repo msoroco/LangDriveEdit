@@ -28,13 +28,14 @@ def prepare_output_dir(global_output_dir):
     run_dirs = [name for name in os.listdir(global_output_dir) if os.path.isdir(os.path.join(global_output_dir, name))]
     run_numbers = [int(re.search(r'run_(\d+)', name).group(1)) for name in run_dirs if re.search(r'run_(\d+)', name)]
     base_count = max(run_numbers, default=0)
-    logging.debug('Next run number:', base_count)
+    logging.debug('Next run number: %s', base_count)
 
     # create a new directory for the current run
     out_dir = os.path.join(global_output_dir, 'run_' + str(base_count+1))
     os.makedirs(out_dir, exist_ok=True)
 
-    logging.info('Saving images to', out_dir)
+    logging.info('Saving images to %s', out_dir)
+    return out_dir
 
 def attach_sensor(vehicle, sensor_type, height=0.5, fps=1.0):
     """Attaches a sensor to a vehicle at a certain height above the vehicle.
@@ -43,7 +44,9 @@ def attach_sensor(vehicle, sensor_type, height=0.5, fps=1.0):
     sensors = {}
     for i, role in enumerate(['front', 'front_right', 'rear_right', 'rear', 'rear_left', 'front_left']):
         # create a transform to place the camera on top of the vehicle.
-        camera_init_trans = carla.Transform(carla.Location(z=height, x=1.5), carla.Rotation(yaw=60*i))
+        x_value = 1.4 * math.cos(math.radians(60*i)) - 0.28
+        y_value = 0.28 * math.sin(math.radians(60*i))
+        camera_init_trans = carla.Transform(carla.Location(z=height, x=x_value, y=y_value), carla.Rotation(yaw=60*i))
         # We create the camera through a blueprint that defines its properties
         camera_bp = world.get_blueprint_library().find(sensor_type)
         # Set the time in seconds between sensor captures
@@ -52,8 +55,44 @@ def attach_sensor(vehicle, sensor_type, height=0.5, fps=1.0):
         # We spawn the camera and attach it to our ego vehicle
         camera = world.spawn_actor(camera_bp, camera_init_trans, attach_to=vehicle)
         sensors[role] = camera
-        logging.debug(f'Created {role} camera:', camera)
+        logging.debug(f'Created {role} camera: {camera}')
     return sensors
+
+def activate_sensors(sensors, output_dir):
+    """Activates the sensors to start listening for data.
+        `sensors` is a dictionary of sensors where each key is a sensor type and the value is a dictionary of sensors representing a 360 view.
+    """
+    # TODO: add support for other sensor types (non-image types).
+
+    logging.debug('Saving images to: %s', output_dir)
+
+    def save_to_disk(image, sensor_type, sensor_view, directory):
+        """Saves the image to disk."""
+        name = f'{sensor_type}_{sensor_view.attributes["role_name"]}_%06d.png' % image.frame
+        path = os.path.join(directory, name)
+        image.save_to_disk(path)
+        logging.debug(f'Saved image to disk: {name}')
+
+       
+
+    for sensor_type, sensor_dict in sensors.items():
+        sensor_directory = os.path.join(output_dir, sensor_type)
+        os.makedirs(sensor_directory, exist_ok=True)
+        for sensor_view in sensor_dict.values():
+            sensor_view_subdirectory = os.path.join(sensor_directory, sensor_view.attributes['role_name'])
+            os.makedirs(sensor_view_subdirectory, exist_ok=True)
+            sensor_view.listen(lambda image, st=sensor_type, sv=sensor_view, sd=sensor_view_subdirectory: save_to_disk(image, st, sv, sd))
+            logging.debug('Activated %s sensor: %s', sensor_type, sensor_view)
+
+def stop_and_destroy_sensors(sensors):
+    """Destroys all the sensors."""
+    for sensor_dict in sensors.values():
+        for sensor in sensor_dict.values():
+            sensor.stop()
+            sensor.destroy()
+            logging.debug(f'Destroyed sensor: {sensor}')
+    logging.debug('Destroyed all sensors.')
+
 
 def set_weather_and_time_of_day(realistic=True, **weather_kwargs):
     """Sets the weather for the simulation.
@@ -68,8 +107,8 @@ def set_weather_and_time_of_day(realistic=True, **weather_kwargs):
         
     time_and_weather_instance = time_and_weather(world, realistic=realistic, **weather_kwargs)
     weather = world.get_weather()
-    logging.debug('Weather:', weather)
-    logging.debug('Weather basics:', str(time_and_weather_instance))
+    logging.debug(f'Weather: {weather}')
+    logging.debug('Weather basics: %s', str(time_and_weather_instance))
     return time_and_weather_instance
 
 
@@ -87,17 +126,17 @@ def run(args):
 
 
     settings.fixed_delta_seconds = 0.05  # Set a fixed time step (e.g., 0.05 seconds)
-    logging.debug("Fixed delta seconds:", settings.fixed_delta_seconds) # each simulation tick will advance the simulation time by this amount
-    logging.debug("substepping:", settings.substepping) # substepping improves the accuracy of the physics simulation by dividing each simulation step into smaller substeps
-    logging.debug("Max substep delta time:", settings.max_substep_delta_time) # maximum duration (coarseness) of each substep when substepping is enabled.
-    logging.debug("Max substeps:", settings.max_substeps) # maximum number of substeps (granularity) to perform within each simulation tick.
+    logging.debug("Fixed delta seconds: %s", settings.fixed_delta_seconds) # each simulation tick will advance the simulation time by this amount
+    logging.debug("substepping: %s", settings.substepping) # substepping improves the accuracy of the physics simulation by dividing each simulation step into smaller substeps
+    logging.debug("Max substep delta time: %s", settings.max_substep_delta_time) # maximum duration (coarseness) of each substep when substepping is enabled.
+    logging.debug("Max substeps: %s", settings.max_substeps) # maximum number of substeps (granularity) to perform within each simulation tick.
 
     assert settings.fixed_delta_seconds <= settings.max_substep_delta_time * settings.max_substeps, f"Fixed delta seconds of {settings.fixed_delta_seconds} should be less than {settings.max_substep_delta_time * settings.max_substeps}."
 
 
     # apply the settings
     world.apply_settings(settings)
-    logging.debug("Synchronous mode:", settings.synchronous_mode)
+    logging.debug("Synchronous mode: %s", settings.synchronous_mode)
     assert world.get_settings().synchronous_mode, "Synchronous mode not set."
     # set the Traffic Manager to sync mode
     traffic_manager = client.get_trafficmanager()
@@ -107,10 +146,11 @@ def run(args):
 
 
     # Set the seeds for determinism
-    random.seed(seed_value_1)
-    traffic_manager.set_random_device_seed(seed_value_1)
+    random.seed(args.seed)
+    traffic_manager.set_random_device_seed(args.seed)
     # Set the seed value for pedestrian ** positions **
-    world.set_pedestrian_seed(seed_value_1)
+    # TODO
+    # world.set_pedestrian_seed(args.seed)
 
     bp_lib = world.get_blueprint_library()
     spawn_points = world.get_map().get_spawn_points()
@@ -129,7 +169,7 @@ def run(args):
     ego_sensors = {} # Each key is a sensor type, and the value is a dictionary of sensors representing a 360 view. Use the `role_name` attribute to distinguish between them.
     # TODO: add the other sensors
     for sensor in ['sensor.camera.rgb', 'sensor.camera.semantic_segmentation', 'sensor.camera.depth']:
-        sensors_360 = attach_sensor(ego_vehicle, sensor, height=0.5, fps=args.fps)
+        sensors_360 = attach_sensor(ego_vehicle, sensor, height=1.75, fps=args.fps)
         ego_sensors[sensor] = sensors_360
 
 
@@ -137,11 +177,11 @@ def run(args):
     time_and_weather_instance = set_weather_and_time_of_day()
 
     # set the buidlings (do nothing if no edits are specified)
-    TODO
+    # TODO
     # set the NPC actors (random if no edits are specified).
     # valid spawn points (translating vehicles??)
     # NPC vehicles, pedestrians, etc. Apply traffic manager.
-    TODO
+    # TODO
 
 
     def tick_world():
@@ -154,7 +194,9 @@ def run(args):
 
     ### --------------------- Run the simulation --------------------- ###
     # call camera.listen on all sensors
-    TODO
+    activate_sensors(ego_sensors, args.output)
+    world.tick() # tick once to activate the sensors
+    logging.debug('Activated sensors.')
 
     total_seconds = args.length
     num_ticks = math.ceil(total_seconds / world.get_settings().fixed_delta_seconds)
@@ -162,15 +204,27 @@ def run(args):
         frame_id = tick_world() # returns the id of the new frame computed by the server
         logging.debug(f"Frame id: {frame_id}")
         # Track the metadata of the simulation
-        TODO
+        # TODO
 
 
+    # stop the simulation
+    logging.info('stopping and destroying sensors')
+    stop_and_destroy_sensors(ego_sensors)
     # destroy agents gracefully
     logging.info('destroying actors')
-    # TODO: desctroy the sensors
-    camera.destroy()
+
     # TODO: destroy the actors
+    actor_list = [ego_vehicle]
     client.apply_batch([carla.command.DestroyActor(x) for x in actor_list])
+
+    # Always disable sync mode before the script ends to prevent the server blocking whilst waiting for a tick
+    logging.info('Disabling synchronous mode')
+    settings = world.get_settings()
+    settings.synchronous_mode = False
+    traffic_manager.set_synchronous_mode(False)
+    world.apply_settings(settings)
+    logging.debug('Synchronous mode: %s', settings.synchronous_mode)
+    assert not world.get_settings().synchronous_mode, "Synchronous mode not disabled."
     logging.info('done.')
 
 
@@ -186,7 +240,8 @@ def main(args):
     # TODO: etc...
 
     # prepare the output directory
-    prepare_output_dir(args.output)
+    run_output_dir = prepare_output_dir(args.output)
+    args.output = run_output_dir
 
     global world, client
     client = carla.Client('localhost', 2000)
@@ -194,37 +249,40 @@ def main(args):
 
     # load world by sampling a random map unless specified
     maps = client.get_available_maps()
-    logging.debug('Available maps:', maps)
+    logging.debug('Available maps: %s', maps)
     if args.map:
         map_name = args.map
     else:
         map_name = random.choice(maps)
     world = client.load_world(map_name)
-    logging.info('Loaded map:', map_name)
+    logging.info('Loaded map: %s', map_name)
 
 
     # save random state:
     random_state = random.getstate()
     np_random_state = np.random.get_state()
     for r in range(2):
+        logging.info(f'{"="*14} Starting simulation {r+1}. {"="*14}')
         # Each simulation will also set the seeds for determinism
         if r == 0:
             pass
             # simulate
-            TODO
+            # TODO: any return values?
+            run(args)
         else:
             pass
             # restore the random state
             random.setstate(random_state)
             np.random.set_state(np_random_state)
             # sample an editing operation
-            TODO
+            # TODO
             # save the random state
             random_state = random.getstate()
             np_random_state = np.random.get_state()
 
             # simulate
-            TODO
+            # TODO: any return values?
+            run(args)
 
 
 
@@ -249,12 +307,35 @@ if __name__ == '__main__':
         '-f', '--fps',
         metavar='float',
         default='10.0',
+        type=float,
         help='Set the frames per second for the sensors')
     argparser.add_argument(
         '-l', '--length',
         metavar='secs',
         default='20.0',
+        type=float,
         help='The length of the simulation in seconds')
+    argparser.add_argument(
+        '-s', '--seed',
+        metavar='int',
+        default='1234',
+        type=int,
+        help='The seed value for the simulation')
+    argparser.add_argument(
+        '-m', '--map',
+        metavar='MAP',
+        default=None,
+        help='The map to load.')
+    argparser.add_argument(
+        '--host',
+        metavar='HOST',
+        default='localhost',
+        help='The IP of the host server')
+    argparser.add_argument(
+        '--port',
+        metavar='PORT',
+        default='2000',
+        help='The port of the host server')
     
     args = argparser.parse_args()
 
@@ -264,5 +345,10 @@ if __name__ == '__main__':
     logging.info('listening to server %s:%s', args.host, args.port)
 
 
-
-    main()
+    try:
+        main(args)
+    finally:
+        # delete the output directory if it is empty
+        if not os.listdir(args.output):
+            os.rmdir(args.output)
+            logging.info('Deleted empty output run directory: %s', args.output)
