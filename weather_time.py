@@ -100,7 +100,7 @@ class Weather(object):
 
 
 class time_and_weather():
-    def __init__(self, world, realistic=True, speed_factor=0.01,  **kwargs):
+    def __init__(self, world, speed_factor=0.01,  **kwargs):
         """
         if `random` is True, the weather is set to random values based on values in `kwargs`. 
         
@@ -115,27 +115,49 @@ class time_and_weather():
         The parameters will be constant.        
         """
         self.world = world
-        self.realistic_weather = realistic
         self.kwargs = kwargs
         self.speed_factor = speed_factor
 
         update_freq = 0.1 / speed_factor
 
-        if self.realistic_weather:
-            weather = world.get_weather()
-            for key, value in kwargs.items():
-                setattr(weather, key, value)
-            world.set_weather(weather)
-            self.weather = Weather(world.get_weather())
+        # world.set_weather(carla.WeatherParameters.WetCloudySunset)
+        # https://carla.readthedocs.io/en/0.9.8/python_api/#carla.WeatherParameters:~:text=Note%3A-,ClearNoon,-%2C%20CloudyNoon%2C%20WetNoon%2C%20WetCloudyNoon
+
+        # if self.realistic_weather:
+        #     if 'profile' in kwargs:
+        #         world.set_weather(getattr(carla.WeatherParameters, kwargs['profile']))
+        #         self.weather = Weather(world.get_weather())
+        #     else:
+        #         weather = world.get_weather()
+        #         for key, value in kwargs.items():
+        #             setattr(weather, key, value)
+        #         world.set_weather(weather)
+        #         self.weather = Weather(world.get_weather())
+        # else:
+        #     # set the weather via settings using kwards specified:
+        #     weather = world.get_weather()
+        #     for key, value in kwargs.items():
+        #         setattr(weather, key, value)
+        #     world.set_weather(weather)
+
+    def set_weather(self, **kwargs):
+        if 'profile' in kwargs:
+            self.world.set_weather(getattr(carla.WeatherParameters, kwargs['profile']))
+            self.weather = Weather(self.world.get_weather())
+            self.initial_settings = self.world.get_weather()
+            self.constant = True
         else:
-            # set the weather via settings using kwards specified:
-            weather = world.get_weather()
+            weather = self.world.get_weather()
             for key, value in kwargs.items():
                 setattr(weather, key, value)
-            world.set_weather(weather)
+            self.world.set_weather(weather)
+            self.weather = Weather(self.world.get_weather())
+            self.initial_settings = self.world.get_weather()
+            self.constant = False
+        self.tick(0.5)
 
     def tick(self, elapsed_time):
-        if self.realistic_weather:
+        if not self.constant:
             self.weather.tick(self.speed_factor * elapsed_time)
             self.world.set_weather(self.weather.weather)
 
