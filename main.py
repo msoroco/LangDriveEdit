@@ -207,7 +207,7 @@ def set_weather_and_time_of_day(**weather_kwargs):
     time_and_weather_instance = time_and_weather(world)
     time_and_weather_instance.set_weather(**weather_kwargs)
     world.tick()
-
+    editor.record('weather', time_and_weather_instance)
     editor.apply('weather', time_and_weather_instance)
 
     weather = world.get_weather()
@@ -222,20 +222,34 @@ def spawn_vehicle_actors(spawn_points, vehicle_blueprints, num_actors=None):
         `num_actors` is the number of actors to spawn. If None, a random number will be chosen.
     """
     if num_actors is None:
-        num_actors = random.randint(1, 10)
+        # num_actors = random.randint(1, 50)
+        num_actors = 4
     logger.debug(f'Spawning {num_actors} vehicle actors.')
 
     spawn_points = random.sample(spawn_points, num_actors)
     vehicle_types = [random.choice(vehicle_blueprints) for _ in range(num_actors)]
+    indices = []
     vehicles = []
+    spawned_locations = []
+    vehicle_types = editor.apply('npc_vehicles', vehicle_types)
     for i, (spawn_point, vehicle_type) in enumerate(zip(spawn_points, vehicle_types)):
         vehicle = world.try_spawn_actor(vehicle_type, spawn_point)
         if vehicle is None:
             logger.debug(f'Failed to spawn vehicle actor at spawn point: {spawn_point}.')
         else:
+            indices.append(i)
             vehicles.append(vehicle)
+            spawned_locations.append(spawn_point)
             logger.verbose_debug(f'Spawned vehicle actor number {i}: {vehicle}')
+
+    editor.record('npc_vehicles', {'vehicles': vehicles, 'indices': indices})
     world.tick() # tick once to make sure the vehicles are spawned
+
+    print("vehicles", vehicles)
+    print("spawn_points", spawned_locations)
+    for vehicle in vehicles:
+        # print(vehicle.attributes)
+        print("vehicle location", vehicle.get_location(), vehicle.attributes['ros_name'])
     logger.info(f'Spawned {len(vehicles)} vehicle actors.')
     return vehicles
 
@@ -384,13 +398,25 @@ def run(args):
         logger.info('stopping and destroying sensors')
         stop_and_destroy_sensors(ego_sensors)
 
+        settings = world.get_settings()
+        settings.synchronous_mode = False
+        settings.no_rendering_mode = False
+        settings.fixed_delta_seconds = None
+        world.apply_settings(settings)
+
         logger.info('destroying actors')
 
         # TODO: destroy the actors (walkers, vehicles, etc.)
         # actor_list = list(world.get_actors()) # causes simulation to shut down
         actor_list = [ego_vehicle] + vehicles
-        client.apply_batch([carla.command.DestroyActor(x) for x in actor_list])
-
+        print([actor.id for actor in actor_list])
+        batch = [carla.command.DestroyActor(x) for x in actor_list]
+        results = client.apply_batch_sync(batch, True)
+        print("results", results)
+        for i, result in enumerate(results):
+            if result.error:
+                logger.error(f"Failed to destroy actor {actor_list[i].id}: {result.error}")
+        
         # Always disable sync mode before the script ends to prevent the server blocking whilst waiting for a tick
         logger.info('Disabling synchronous mode')
         settings = world.get_settings()
@@ -458,6 +484,7 @@ def main(args):
             random.setstate(random_state)
             np.random.set_state(np_random_state)
             # sample an editing operation
+            logger.info('Sampling an editing operation.')
             sample_editing_operation(args)
             editor.edit()
             # TODO
