@@ -35,13 +35,13 @@ class Editor():
         
 
     def record(self, key, editable_object):
-        """Records the object to be edited."""
+        """Records the object to be edited if recording mode is on."""
         if self.recording_mode:
             self.records[key] = editable_object
 
 
     def apply(self, key, editable_object):
-        print(self.args)
+        """Applies the edits to the object if recording mode is off, else returns the object."""
         if not self.recording_mode:
             if getattr(self.args, 'time_of_day', False) and key == 'weather':
                 editable_object.set_weather(**self.edits_to_insert['time_of_day'])
@@ -51,23 +51,11 @@ class Editor():
                 editable_object.set_weather(**self.edits_to_insert['weather_and_time_of_day'])
             
             if getattr(self.args, 'vehicle_replacement', False) and key == 'npc_vehicles':
-                vehicle_types = editable_object
-                
+                vehicle_types = editable_object            
                 new_vehicle_bp = self.edits_to_insert['vehicle_replacement']['new_vehicle']
-                # spawn_point = self.edits_to_insert['vehicle_replacement']['spawn_point']
                 i = self.edits_to_insert['vehicle_replacement']['index']
-
-                # replace the new vehicles at index i with the edited vehicle.
                 old = vehicle_types[i]
-                print("vehicle_types", vehicle_types)
-                # destroyed_successfully = old.destroy()
-                # # carla.command.DestroyActor(old) # can this work without world.tick()?
-                # self.world.tick()
-                # print("destroyed_successfully", destroyed_successfully)
-                # print("spawn_point", spawn_point)
-                # new_vehicle = self.world.spawn_actor(new_vehicle_bp, spawn_point)
                 vehicle_types[i] = new_vehicle_bp
-                print("vehicle_types after edit", vehicle_types)
                 return vehicle_types
         else:       
             return editable_object
@@ -206,16 +194,10 @@ class Editor():
         dictionary = self.records['npc_vehicles']
         list_vehicles = dictionary['vehicles']
         list_indices = dictionary['indices']
-        # store a list of (index, vehicle_type) tuples
         old_vehicles = [(i, v.attributes) for i, v in zip(list_indices, list_vehicles)]
-        print(list_vehicles[0].attributes)
-        print(list_vehicles[0].type_id)
-        print(list_vehicles[0].id)
         vehicle_to_edit_tuple = random.choice(old_vehicles)
         vehicle_bp = self.world.get_blueprint_library().filter('*vehicle*')
         new_vehicle = random.choice(vehicle_bp)
-        print("new_vehicle", new_vehicle)
-        print("vehicle_to_edit", vehicle_to_edit_tuple)
         while new_vehicle.id == vehicle_to_edit_tuple[1]['ros_name']:
             new_vehicle = random.choice(vehicle_bp)
 

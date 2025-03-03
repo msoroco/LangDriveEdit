@@ -222,8 +222,7 @@ def spawn_vehicle_actors(spawn_points, vehicle_blueprints, num_actors=None):
         `num_actors` is the number of actors to spawn. If None, a random number will be chosen.
     """
     if num_actors is None:
-        # num_actors = random.randint(1, 50)
-        num_actors = 4
+        num_actors = random.randint(1, 50)
     logger.debug(f'Spawning {num_actors} vehicle actors.')
 
     spawn_points = random.sample(spawn_points, num_actors)
@@ -245,11 +244,8 @@ def spawn_vehicle_actors(spawn_points, vehicle_blueprints, num_actors=None):
     editor.record('npc_vehicles', {'vehicles': vehicles, 'indices': indices})
     world.tick() # tick once to make sure the vehicles are spawned
 
-    print("vehicles", vehicles)
-    print("spawn_points", spawned_locations)
     for vehicle in vehicles:
-        # print(vehicle.attributes)
-        print("vehicle location", vehicle.get_location(), vehicle.attributes['ros_name'])
+        logger.verbose_debug("vehicle location", vehicle.get_location(), vehicle.attributes['ros_name'])
     logger.info(f'Spawned {len(vehicles)} vehicle actors.')
     return vehicles
 
@@ -398,21 +394,15 @@ def run(args):
         logger.info('stopping and destroying sensors')
         stop_and_destroy_sensors(ego_sensors)
 
-        settings = world.get_settings()
-        settings.synchronous_mode = False
-        settings.no_rendering_mode = False
-        settings.fixed_delta_seconds = None
-        world.apply_settings(settings)
+
 
         logger.info('destroying actors')
 
         # TODO: destroy the actors (walkers, vehicles, etc.)
         # actor_list = list(world.get_actors()) # causes simulation to shut down
         actor_list = [ego_vehicle] + vehicles
-        print([actor.id for actor in actor_list])
         batch = [carla.command.DestroyActor(x) for x in actor_list]
         results = client.apply_batch_sync(batch, True)
-        print("results", results)
         for i, result in enumerate(results):
             if result.error:
                 logger.error(f"Failed to destroy actor {actor_list[i].id}: {result.error}")
@@ -421,6 +411,7 @@ def run(args):
         logger.info('Disabling synchronous mode')
         settings = world.get_settings()
         settings.synchronous_mode = False
+        settings.fixed_delta_seconds = None
         traffic_manager.set_synchronous_mode(False)
         world.apply_settings(settings)
         logger.debug('Synchronous mode: %s', settings.synchronous_mode)
