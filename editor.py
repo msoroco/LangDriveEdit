@@ -47,12 +47,15 @@ class Editor():
         if not self.recording_mode:
             if key == 'weather':
                 if getattr(self.args, 'time_of_day', False):
-                    editable_object.set_weather(**self.edits_to_insert['time_of_day'])
+                    # editable_object.set_weather(**self.edits_to_insert['time_of_day'])
+                    return self.edits_to_insert['time_of_day']
                 if getattr(self.args, 'weather', False):
-                    editable_object.set_weather(**self.edits_to_insert['weather'])
+                    # editable_object.set_weather(**self.edits_to_insert['weather'])
+                    return self.edits_to_insert['weather']
                 if getattr(self.args, 'weather_and_time_of_day', False):
-                    editable_object.set_weather(**self.edits_to_insert['weather_and_time_of_day'])
-                return
+                    # editable_object.set_weather(**self.edits_to_insert['weather_and_time_of_day'])
+                    return self.edits_to_insert['weather_and_time_of_day']
+                return editable_object
             elif key == 'npc_vehicles':            
                 if getattr(self.args, 'vehicle_replacement', False):
                     vehicle_types = editable_object['vehicle_names']
@@ -186,21 +189,21 @@ class Editor():
             edits_to_insert[k] = v
 
         self.edits_to_insert = edits_to_insert
-        print(self.edits_to_insert)
+        print(self.records)
 
     def edit_time_of_day(self):
         """sample a time of day and add it to a weather object"""
-        time_and_weather_instance = self.records['weather']
-        if 'profile' in time_and_weather_instance.kwargs:
-            old_profile = time_and_weather_instance.kwargs['profile']
+        weather_kwargs = self.records['weather']
+        if 'profile' in weather_kwargs:
+            old_profile = weather_kwargs['profile']
             if old_profile.endswith('Sunset'):
                 new_profile = old_profile.replace('Sunset', 'Noon')
             else:
                 new_profile = old_profile.replace('Noon', 'Sunset')
             return 'time_of_day', {'profile': new_profile}
         else:
-            old_azimuth = time_and_weather_instance.initial_settings.sun_azimuth_angle
-            old_altitude = time_and_weather_instance.initial_settings.sun_altitude_angle
+            old_azimuth = weather_kwargs.sun_azimuth_angle
+            old_altitude = weather_kwargs.sun_altitude_angle
             if old_altitude < 0:
                 new_altitude = random.uniform(10, 70)
             if old_altitude > 20:
@@ -215,17 +218,20 @@ class Editor():
 
 
     def edit_weather(self):
-        time_and_weather_instance = self.records['weather']
-        if 'profile' in time_and_weather_instance.kwargs:
-            old_profile = time_and_weather_instance.kwargs['profile']
+        weather_kwargs = self.records['weather']
+        if 'profile' in weather_kwargs:
+            old_profile = weather_kwargs['profile']
+            print(old_profile)
             if old_profile.endswith('Sunset'):
-                options = ['ClearSunset', 'CloudySunset', 'WetSunset', 'WetCloudySunset', 'SoftRainSunset', 'MidRainSunset', 'HardRainSunset'].remove(old_profile)
+                options = ['ClearSunset', 'CloudySunset', 'WetSunset', 'WetCloudySunset', 'SoftRainSunset', 'MidRainSunset', 'HardRainSunset']
             else:
-                options = ['ClearNoon', 'CloudyNoon', 'WetNoon', 'WetCloudyNoon', 'SoftRainNoon', 'MidRainyNoon', 'HardRainNoon'].remove(old_profile)
+                options = ['ClearNoon', 'CloudyNoon', 'WetNoon', 'WetCloudyNoon', 'SoftRainNoon', 'MidRainyNoon', 'HardRainNoon']
+            options.remove(old_profile)
+            print(options)
             new_profile = random.choice(options)
-            return 'weather_and_time_of_day', {'profile': new_profile}
+            return 'weather', {'profile': new_profile}
         else:
-            old_precipitation = time_and_weather_instance.initial_settings.precipitation
+            old_precipitation = weather_kwargs.precipitation
             if old_precipitation > 0:
                 new_precipitation = random.uniform(-100, -50)
             else:
@@ -233,16 +239,18 @@ class Editor():
             return 'weather', {'precipitation': new_precipitation}
 
     def edit_weather_and_time_of_day(self):
-        time_and_weather_instance = self.records['weather']
-        if 'profile' in time_and_weather_instance.kwargs:
-            old_profile = time_and_weather_instance.kwargs['profile']
-            options = ['ClearNoon', 'CloudyNoon', 'WetNoon', 'WetCloudyNoon', 'SoftRainNoon', 'MidRainyNoon', 'HardRainNoon', 'ClearSunset', 'CloudySunset', 'WetSunset', 'WetCloudySunset', 'SoftRainSunset', 'MidRainSunset', 'HardRainSunset'].remove(old_profile)
+        weather_kwargs = self.records['weather']
+        if 'profile' in weather_kwargs:
+            old_profile = weather_kwargs['profile']
+            options = ['ClearNoon', 'CloudyNoon', 'WetNoon', 'WetCloudyNoon', 'SoftRainNoon', 'MidRainyNoon', 'HardRainNoon', 'ClearSunset', 'CloudySunset', 'WetSunset', 'WetCloudySunset', 'SoftRainSunset', 'MidRainSunset', 'HardRainSunset']
+        
+            options.remove(old_profile)
             new_profile = random.choice(options)
             return 'weather_and_time_of_day', {'profile': new_profile}
         else:
             # TODO: don't force weather and time to both change always
-            old_azimuth = time_and_weather_instance.initial_settings.sun_azimuth_angle
-            old_altitude = time_and_weather_instance.initial_settings.sun_altitude_angle
+            old_azimuth = weather_kwargs.sun_azimuth_angle
+            old_altitude = weather_kwargs.sun_altitude_angle
             if old_altitude < 0:
                 new_altitude = random.uniform(10, 70)
             if old_altitude > 20:
@@ -253,7 +261,7 @@ class Editor():
             if old_altitude > 40:
                 new_altitude = random.uniform(-20, 10)
             new_azimuth = random.uniform(0, 360)
-            old_precipitation = time_and_weather_instance.initial_settings.precipitation
+            old_precipitation = weather_kwargs.precipitation
             if old_precipitation > 0:
                 new_precipitation = random.uniform(-100, -50)
             else:
@@ -276,29 +284,13 @@ class Editor():
 
     def edit_vehicle_color(self):
         dictionary = self.records['npc_vehicles']
-        # list_vehicles = dictionary['vehicle_names']
         list_indices = dictionary['indices']
-        # old_vehicles = [(i, v) for i, v in zip(list_indices, list_vehicles)]
         tuples = random.sample(list_indices, len(list_indices))
         edits = []
         for index in tuples:
-            # vehicle_bp = self.world.get_blueprint_library().find(old_name)
-            # print("old car bp", vehicle_bp)
-            # if vehicle_bp.has_attribute('color'):
             color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
             color = f"{color[0]},{color[1]},{color[2]}"
 
-
-                # # recommended_colors = vehicle_bp.get_attribute('color').recommended_values
-                # # print("recommended values", recommended_colors)
-                # # recommended_colors.remove(attributes['color'])
-                # # print("filtered recommended values", recommended_colors)
-                # # color = random.choice(recommended_colors)
-                # # print(color)
-                # vehicle_bp.set_attribute('color', color)
-
-    
-            # print("Setting color to: ", vehicle_bp)
             edits.append({'index': index, 'new_vehicle_color': color})
         return 'vehicle_color', edits
 
@@ -362,7 +354,7 @@ class Editor():
                 walker_id = new_walker_id
                 # walker_bp = self.world.get_blueprint_library().find("walker.pedestrian." + new_walker_id)
 
-            edits.append({'index': index, 'new_walker_id': walker_id})
+            edits.append({'index': index, 'new_walker_id': "walker.pedestrian." + f"{int(walker_id):04d}"})
         return 'walker_color', edits
 
 
@@ -379,7 +371,7 @@ class Editor():
             new_walker = random.choice(walker_bp)
             while new_walker.id == old_type:
                 new_walker = random.choice(walker_bp)
-            edits.append({'index': index, 'new_walker': new_walker})
+            edits.append({'index': index, 'new_walker': new_walker.id})
         return 'walker_replacement', edits
     
     def edit_walker_deletion(self):

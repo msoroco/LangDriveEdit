@@ -2,6 +2,7 @@ import os
 import imageio
 import numpy as np
 import math
+import random
 
 def create_video_from_images(image_folder, output_dir, fps=30, savetype='mp4', levels=3):
     """
@@ -148,3 +149,65 @@ def get_visible_actors(camera, world, actors):
         if is_bounding_box_in_view(camera, bounding_box):
             visible_actors.append(actor)
     return visible_actors
+
+
+
+def get_neighborhood(image, x, y, window_size):
+    half_window = window_size // 2
+    neighborhood = image[max(0, y-half_window):y+half_window+1, max(0, x-half_window):x+half_window+1]
+    return neighborhood
+
+def ssd(neighborhood1, neighborhood2):
+    """ Return the sum of squared differences between two neighborhoods. """
+    return np.sum((neighborhood1 - neighborhood2) ** 2)
+
+def find_best_matches(input_image, neighborhood, window_size, tolerance=0.1, sample_fraction=0.1):
+    """Find the best matches for a neighborhood in an input image.
+        The candidate neighbourhoods are non-overlapping.
+    """
+    input_height, input_width = input_image.shape[:2]
+    half_window = window_size // 2
+    best_matches = []
+    min_ssd = float('inf')
+
+    # Generate a list of all possible neighborhood coordinates
+    all_coordinates = [(x, y) for y in range(half_window, input_height - half_window)
+                       for x in range(half_window, input_width - half_window)]
+
+    # Randomly sample a subset of coordinates
+    # sample_size = int(len(all_coordinates) * sample_fraction)
+    sample_size=5
+    sampled_coordinates = random.sample(all_coordinates, sample_size)
+
+    for x, y in sampled_coordinates:
+        candidate_neighborhood = get_neighborhood(input_image, x, y, window_size)
+        candidate_ssd = ssd(neighborhood, candidate_neighborhood)
+        if candidate_ssd < min_ssd:
+            min_ssd = candidate_ssd
+            best_matches = [(x, y)]
+        elif candidate_ssd <= min_ssd * (1 + tolerance):
+            best_matches.append((x, y))
+
+    return best_matches
+
+def synthesize_texture(input_image, output_size, window_size):
+    """Based on the Efros and Leung algorithm for texture synthesis."""
+    input_image = np.array(input_image)
+    output_image = np.zeros((output_size[1], output_size[0], 3), dtype=np.uint8)
+    half_window = window_size // 2
+
+    # Initialize the output image with a small seed region from the input image
+    seed_x = random.randint(0, input_image.shape[1] - window_size)
+    seed_y = random.randint(0, input_image.shape[0] - window_size)
+    output_image[:window_size, :window_size] = input_image[seed_y:seed_y+window_size, seed_x:seed_x+window_size]
+
+    print("output size: ", output_size, "half window: ", half_window)
+    print("num iterations in both total: ", (output_size[1] - half_window) * (output_size[0] - half_window))
+    for y in range(half_window, output_size[1] - half_window):
+        for x in range(half_window, output_size[0] - half_window):
+            neighborhood = get_neighborhood(output_image, x, y, window_size)
+            best_matches = find_best_matches(input_image, neighborhood, window_size)
+            best_match = random.choice(best_matches)
+            output_image[y, x] = input_image[best_match[1], best_match[0]]
+
+    return output_image

@@ -100,7 +100,7 @@ class Weather(object):
 
 
 class time_and_weather():
-    def __init__(self, world, speed_factor=0.01,  **kwargs):
+    def __init__(self, world, speed_factor=0.005,  **kwargs):
         """
         if `random` is True, the weather is set to random values based on values in `kwargs`. 
         

@@ -1,3 +1,4 @@
+import gc
 import logging
 import queue
 import re
@@ -7,6 +8,7 @@ import random
 import time
 import imageio
 import os
+from tqdm import tqdm
 # debugging imports
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,13 +18,29 @@ import argparse
 
 from weather_time import time_and_weather
 from utils import create_video_from_images
-from track_metadata import MetadataTracker, MetadataTracker_simple
+from track_metadata import MetadataTracker_simple, PositionTracker #MetadataTracker
 from editor import Editor
 
 world = None
 client = None
 editor = None
-
+EDITS = [
+    'time_of_day',
+    'weather',
+    'weather_and_time_of_day',
+    'lane_marking',
+    'building_texture',
+    'vehicle_lights',
+    'vehicle_color',
+    'vehicle_replacement',
+    'vehicle_deletion',
+    'walker_color',
+    'walker_replacement',
+    'walker_deletion',
+    'building_deletion',
+    'road_texture',
+    'building_texture'
+]
 
 VERBOSE = 5
 logging.addLevelName(VERBOSE, "VERBOSE")
@@ -76,34 +94,11 @@ def sample_editing_operation(args):
         The edit will set a flag in the args object to indicate the type of edit to apply.
 
         Note that multiple edits can be applied at once if these flags are activated elsewhere in the code:
-        'time_of_day',
-        'weather',
-        'weather_and_time_of_day',
-        'lane_marking',
-        'building_texture',
-        'vehicle_lights',
-        'vehicle_color',
-        'vehicle_replacement',
-        'vehicle_deletion',
-        'building_deletion',
-        'pedestrian_deletion',
     """
-    edits = [
-        'time_of_day',
-        'weather',
-        'weather_and_time_of_day',
-        'lane_marking',
-        'building_texture',
-        'vehicle_lights',
-        'vehicle_color',
-        'vehicle_replacement',
-        'vehicle_deletion',
-        'building_deletion',
-        'pedestrian_deletion',
-    ]
+
     if args.edit == 'random':
         logger.info('Sampling an editing operation.')
-        edit = random.choice(edits)
+        edit = random.choice(EDITS)
         logger.info('Sampled edit: %s', edit)
     else:
         logger.info(f'No edit sampled. User specifed the edit: {args.edit}.')
@@ -134,12 +129,12 @@ def attach_sensor(vehicle, sensor_type, height=1.75, fps=1.0, attachement_type=c
         x_value = 1.4 * math.cos(math.radians(60*i)) - 0.28
         y_value = 0.28 * math.sin(math.radians(60*i))
         camera_init_trans = carla.Transform(carla.Location(z=height, x=x_value, y=y_value), carla.Rotation(yaw=60*i))
-        # We create the camera through a blueprint that defines its properties
+        # create the camera through a blueprint that defines its properties
         camera_bp = world.get_blueprint_library().find(sensor_type)
-        # Set the time in seconds between sensor captures
+        # set the time in seconds between sensor captures
         camera_bp.set_attribute('sensor_tick', str(round(1/fps, 5)))
         camera_bp.set_attribute('role_name', role)
-        # We spawn the camera and attach it to our ego vehicle
+        # spawn the camera and attach it to our ego vehicle
         camera = world.spawn_actor(camera_bp, camera_init_trans, attach_to=vehicle, attachment_type=attachement_type)
         sensors[role] = camera
         queues[role] = queue.Queue()
@@ -147,28 +142,49 @@ def attach_sensor(vehicle, sensor_type, height=1.75, fps=1.0, attachement_type=c
     return sensors, queues
 
 
-def activate_sensors(sensors, sensor_queues):
+def activate_sensors(sensors, sensor_queues, output_dir=None, tracker=None):
     """Activates the sensors to start listening for data.
         `sensors` is a dictionary of sensors where each key is a sensor type and the value is a dictionary of sensors representing a 360 view.
         `sensor_queues` is a dictionary of queues where each key is a sensor type and the value is a dictionary of queues to hold the images from each view of the sensor type.
     """
+    def save_to_disk(image, sensor_type, role, directory, tracker=None):
+        """Saves the image to disk."""
+        name = f'{sensor_type}_{role}_%06d.png' % image.frame
+        path = os.path.join(directory, name)
+        if tracker is not None:
+            tracker.track_metadata(image.frame)
+        image.save_to_disk(path)
+        logger.verbose_debug(f'Saved image to disk: {name}')
+
+    def add_to_queue(image, sensor_queue, tracker=None):
+        sensor_queue.put(image)
+        if tracker is not None:
+            tracker.track_metadata(image.frame)
+
     logger.debug('Activating sensors and saving images to queues.')
     for sensor_type, sensor_dict in sensors.items():
         for role, sensor_view in sensor_dict.items():
             sensor_queue = sensor_queues[sensor_type][role]
-            sensor_view.listen(sensor_queue.put)
+            if sensor_type == 'sensor.camera.rgb' and role == 'front':
+                sensor_view.listen(lambda image, sq=sensor_queue: add_to_queue(image, sq, tracker))
+            else:
+                sensor_view.listen(sensor_queue.put)
+            # sensor_view.listen(lambda image, st=sensor_type, r=role, o=output_dir: save_to_disk(image, st, r, o))
             logger.debug('Activated %s sensor: %s', sensor_type, sensor_view)
 
-def save_images_from_queues(sensor_queues, output_dir, tracker : MetadataTracker):
+def save_images_from_queues(sensor_queues, output_dir, tracker, frame_id):
     """Reads images from the sensor queues and saves them to disk.
         `sensor_queues` is a dictionary of queues where each key is a sensor type and the value is a dictionary of queues to hold the images from the sensor.
         `output_dir` is the directory where the images will be saved.
     """
-    def save_to_disk(image, sensor_type, role, directory):
+    def save_to_disk(image, sensor_type, role, directory, cc=None):
         """Saves the image to disk."""
         name = f'{sensor_type}_{role}_%06d.png' % image.frame
         path = os.path.join(directory, name)
-        image.save_to_disk(path)
+        if cc is None:
+            image.save_to_disk(path)
+        else:
+            image.save_to_disk(path, cc)
         logger.verbose_debug(f'Saved image to disk: {name}')
 
     for sensor_type, queue_dict in sensor_queues.items():
@@ -179,19 +195,38 @@ def save_images_from_queues(sensor_queues, output_dir, tracker : MetadataTracker
             os.makedirs(sensor_view_subdirectory, exist_ok=True)
             while not sensor_queue.empty():
                 image = sensor_queue.get()
-                save_to_disk(image, sensor_type, role, sensor_view_subdirectory)
-                if sensor_type == 'sensor.camera.instance_segmentation':
-                    tracker.track_metadata(image, role, output_dir)
+                # if sensor_type == 'sensor.camera.depth' : ## visualize the output
+                #     cc = carla.ColorConverter.Depth
+                #     save_to_disk(image, sensor_type, role, sensor_view_subdirectory, cc)
+                #     continue
+                save_to_disk(image, sensor_type, role, sensor_view_subdirectory)            
+                
 
-def stop_and_destroy_sensors(sensors):
+def stop_sensors(sensors):
     """Destroys all the sensors."""
     for sensor_dict in sensors.values():
         for sensor in sensor_dict.values():
             sensor.stop()
-            sensor.destroy()
-            logger.debug(f'Destroyed sensor: {sensor}')
-    logger.info('Destroyed all sensors.')
+            logger.debug(f'Stopped sensor: {sensor}')
+    logger.info('stopped all sensors.')
 
+def weather_parameters_to_dict(weather):
+    return {
+        'cloudiness': weather.cloudiness,
+        'precipitation': weather.precipitation,
+        'precipitation_deposits': weather.precipitation_deposits,
+        'wind_intensity': weather.wind_intensity,
+        'sun_azimuth_angle': weather.sun_azimuth_angle,
+        'sun_altitude_angle': weather.sun_altitude_angle,
+        'fog_density': weather.fog_density,
+        'fog_distance': weather.fog_distance,
+        'fog_falloff': weather.fog_falloff,
+        'wetness': weather.wetness,
+        'scattering_intensity': weather.scattering_intensity,
+        'mie_scattering_scale': weather.mie_scattering_scale,
+        'rayleigh_scattering_scale': weather.rayleigh_scattering_scale,
+        'dust_storm': weather.dust_storm
+    }
 
 def set_weather_and_time_of_day(**weather_kwargs):
     """Sets the weather for the simulation.
@@ -204,25 +239,28 @@ def set_weather_and_time_of_day(**weather_kwargs):
 
         Will tick once to update the weather.
     """        
+
+    weather_kwargs = editor.apply('weather', weather_kwargs)
     time_and_weather_instance = time_and_weather(world)
     time_and_weather_instance.set_weather(**weather_kwargs)
     world.tick()
-    editor.record('weather', time_and_weather_instance)
-    editor.apply('weather', time_and_weather_instance)
 
     weather = world.get_weather()
+    weather_dict = weather_parameters_to_dict(weather)
+    weather_kwargs.update(weather_dict)
+    editor.record('weather', weather_kwargs)    
     logger.debug(f'Weather: {weather}')
     logger.debug('Weather basics: %s', str(time_and_weather_instance))
     return time_and_weather_instance
 
-def spawn_vehicle_actors(spawn_points, vehicle_blueprints, num_actors=None):
+def spawn_vehicle_actors(spawn_points, vehicle_blueprints, num_actors=None, positionTracker=None):
     """Spawns vehicle actors in the simulation. Note that the spawn points may be occupied already so the number of actors spawned may be less than `num_actors`.
         `spawn_points` is a list of spawn points.
         `vehicle_blueprints` is a list of vehicle blueprints.
         `num_actors` is the number of actors to spawn. If None, a random number will be chosen.
     """
     if num_actors is None:
-        num_actors = random.randint(1, 50)
+        num_actors = random.randint(1, 30)
     logger.debug(f'Spawning {num_actors} vehicle actors.')
 
     spawn_points = random.sample(spawn_points, num_actors)
@@ -230,31 +268,117 @@ def spawn_vehicle_actors(spawn_points, vehicle_blueprints, num_actors=None):
     indices = []
     vehicles = []
     spawned_locations = []
-    vehicle_types = editor.apply('npc_vehicles', vehicle_types)
-    for i, (spawn_point, vehicle_type) in enumerate(zip(spawn_points, vehicle_types)):
+
+    vehicle_names = []
+    vehicle_colors = []
+    for vehicle_type in vehicle_types:
+        vehicle_names.append(vehicle_type.id)
+        if vehicle_type.has_attribute('color'):
+            color_value = vehicle_type.get_attribute('color').as_color()
+            r, g, b = color_value.r, color_value.g, color_value.b
+            color_string = f"{r},{g},{b}"
+            vehicle_colors.append(color_string)
+        else:  
+            vehicle_colors.append(None)
+
+
+    dict = editor.apply('npc_vehicles', {'vehicle_names': vehicle_names, 'spawn_points': spawn_points, 'vehicle_colors': vehicle_colors})
+    vehicle_names = dict['vehicle_names']
+    spawn_points = dict['spawn_points']
+    removed_indices = dict.get('removed_indices', [])
+    colors = dict['vehicle_colors']
+
+    if len(removed_indices) > 0 and positionTracker is not None:
+        if positionTracker.is_active():
+            positionTracker.ignore_actors(removed_indices)
+
+    spawned_vehicle_names = []
+    spawned_vehicle_colors = []
+    for i, (spawn_point, vehicle_name, color) in enumerate(zip(spawn_points, vehicle_names, colors)):
+        vehicle_type = vehicle_blueprints.find(vehicle_name)
+        if vehicle_type.has_attribute('color'):
+            vehicle_type.set_attribute('color', color)
         vehicle = world.try_spawn_actor(vehicle_type, spawn_point)
         if vehicle is None:
             logger.debug(f'Failed to spawn vehicle actor at spawn point: {spawn_point}.')
         else:
             indices.append(i)
+            spawned_vehicle_names.append(vehicle.attributes['ros_name'])
+            if 'color' in vehicle.attributes:
+                spawned_vehicle_colors.append(vehicle.attributes['color'])
+            else:
+                spawned_vehicle_colors.append(None)
             vehicles.append(vehicle)
             spawned_locations.append(spawn_point)
             logger.verbose_debug(f'Spawned vehicle actor number {i}: {vehicle}')
 
-    editor.record('npc_vehicles', {'vehicles': vehicles, 'indices': indices})
+    editor.record('npc_vehicles', {'vehicle_names': spawned_vehicle_names, 'indices': indices, 'colors': spawned_vehicle_colors})
     world.tick() # tick once to make sure the vehicles are spawned
 
     for vehicle in vehicles:
-        logger.verbose_debug("vehicle location", vehicle.get_location(), vehicle.attributes['ros_name'])
+        logger.verbose_debug("Vehicle location: %s, ROS name: %s", vehicle.get_location(), vehicle.attributes['ros_name']) 
     logger.info(f'Spawned {len(vehicles)} vehicle actors.')
     return vehicles
+
+def spawn_walker_actors(spawn_points, walker_blueprints, num_actors=None):
+    """Spawns walker actors in the simulation.
+        `num_actors` is the number of actors to spawn.
+        `spawn_points` is a list of spawn points.
+        `walker_blueprints` is a list of walker blueprints.
+    """
+    if num_actors is None:
+        num_actors = random.randint(0, 30)
+    
+    spawn_points = []
+    for _ in range(num_actors):
+        for attempt in range(10):
+            spawn_location = world.get_random_location_from_navigation()
+            if spawn_location:
+                spawn_transform = carla.Transform(spawn_location)
+                spawn_points.append(spawn_transform)
+                break
+
+    walker_types = [random.choice(walker_blueprints) for _ in range(num_actors)]
+    walker_names = [walker.id for walker in walker_types]
+    indices = []
+    walkers = []
+    spawned_locations = []
+    dict = editor.apply('npc_walkers', {'walker_names': walker_names, 'spawn_points': spawn_points})
+    walker_names = dict['walker_names']
+    spawn_points = dict['spawn_points']
+    if len(walker_names) > len(spawn_points):
+        walker_names = walker_names[:spawn_points]
+    logger.debug(f'Spawning {num_actors} walker actors.')
+
+    spawned_walker_names = []
+    for i, (spawn_point, walker_name) in enumerate(zip(spawn_points, walker_names)):
+        walker_type = walker_blueprints.find(walker_name)
+        walker = world.try_spawn_actor(walker_type, spawn_point)
+        if walker is None:
+            logger.debug(f'Failed to spawn walker actor at spawn point: {spawn_point}.')
+        else:
+            indices.append(i)
+            walkers.append(walker)
+            spawned_walker_names.append(walker.attributes['ros_name'])
+            spawned_locations.append(spawn_point)
+            logger.verbose_debug(f'Spawned walker actor number {i}: {walker}')
+    editor.record('npc_walkers', {'walker_names': spawned_walker_names, 'indices': indices})
+    world.tick() # tick once to make sure the walkers are spawned
+
+    for walker in walkers:
+        logger.verbose_debug("Walker location: %s, ROS name: %s", walker.get_location(), walker.attributes['ros_name'])
+    logger.info(f'Spawned {num_actors} walker actors.')
+    return walkers
+
+
+
 
 def animate_vehicle_actors(vehicles):
     """Animates the vehicle actors in the simulation."""
     logger.debug('Animating NPC vehicle actors.')
     for vehicle in vehicles:
         vehicle.set_autopilot(True)
-        logger.verbose_debug(f'Animating vehicle actor: {vehicle}')
+        logger.verbose_debug(f'Animating vehicle actor: {vehicle}. {vehicle.attributes}')
     world.tick() # tick once to make sure the vehicles are animating
     logger.info('Animated all NPC vehicle actors.')
 
@@ -264,12 +388,72 @@ def animate_ego_vehicle(ego_vehicle):
     ego_vehicle.set_autopilot(True)
     world.tick() # tick once to make sure the ego vehicle is animating
     logger.info('Animated ego vehicle actor.')
+    
+
+def add_texture_to_buildings():
+    """Adds textures to the buildings in the simulation.
+        * samples a building
+        * samples a texture from a list of textures
+        Note that only the editor (not this method) applies the texture to the building.
+    """
+    names = world.get_names_of_all_objects()
+    include_substrings = ['Apartment', 'Building', 'House', 'Hotel', 'concrete', 'Office', 'Shop', 'Skyscraper', 'building', 'Block', 'Garage', 'GuardShelter', 'Hall', 'WallBridge', 'WallTunnel']
+    exclude_substrings = ['Lights', 'Win', 'Door']
+    # Barel Bench, Container, Fountain, Kiosk, Parking barrier Perkola, Chair, Awning, Secwater, StreetBarrier, TrafficPole, BillBoard, StreetLight, BusStop, Lamppost, StreetLight, HighwayLightm Stop, SpeedLimit,
+    # exclude_substrings = []
+    
+    # Filter names to include only those with the specified substrings and exclude others
+    filtered_names = list(filter(lambda k: any(sub in k for sub in include_substrings) and not any(sub in k for sub in exclude_substrings), names))
+    
+    texture_files = [
+        'blue_glass.jpg',
+        'brown_rock.jpeg',
+        'grey_cement.jpg',
+        'metal_panels.jpeg',
+        'red_brick.jpeg'
+    ]
+    
+    for name in filtered_names:
+        texture = random.choice(texture_files)
+        texture_path = os.path.join('textures', 'building', texture)
+        # editor.record('building_texture', {'building': name, 'texture': texture_path})
+        editor.apply('building_texture', {'building': name, 'texture': texture_path})
+
+        
+def add_texture_to_roads():
+    """Adds textures to the roads in the simulation."""
+    names = world.get_names_of_all_objects()
+    include_substrings = ['Road_Road'] # 'Lane', 'Sidewalk' ]
+    exclude_substrings = ['Lights', 'Win', 'Door', 'Crosswalk', 'Grass', 'Gutter', 'Curb']
+    filtered_names = list(filter(lambda k: any(sub in k for sub in include_substrings), names))
+    ## for now, change all roads to random textures
+    # road_texture_dir = os.path.join('textures', 'road')
+    # texture_files = os.listdir(road_texture_dir)
+    editor.record('road_texture', {'roads': filtered_names})
+    editor.apply('road_texture', {'roads': filtered_names})
+
+
+    # for name in filtered_names:
+    #     texture = random.choice(texture_files)
+    #     texture_path = os.path.join('textures', 'road', texture)
+    #     editor.record('road_texture', {'road': name})
+    #     editor.apply('road_texture', {'road': name})
+
+
+def add_texture_to_sidewalks():
+    """Adds textures to the sidewalks in the simulation."""
+    pass
 
 
 
-def run(args):
+def run(args, **kwargs):
     global world, client
+    world = client.get_world()
+
+    vehicle_positions_tracker = kwargs.get('vehicle_positions_tracker', None)
+    
     # set synchronous mode
+    old_settings = world.get_settings()
     settings = world.get_settings()
 
     # Apply synchronous mode
@@ -290,9 +474,16 @@ def run(args):
     logger.debug("Synchronous mode: %s", settings.synchronous_mode)
     assert world.get_settings().synchronous_mode, "Synchronous mode not set."
     # set the Traffic Manager to sync mode
-    traffic_manager = client.get_trafficmanager()
+    traffic_manager = client.get_trafficmanager(args.tm_port)
     traffic_manager.set_synchronous_mode(True)
+    # Set the seeds for determinism
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    traffic_manager.set_random_device_seed(args.seed)
+    # Set the seed value for pedestrian ** positions **
+    world.set_pedestrians_seed(args.seed)
 
+    traffic_manager.set_hybrid_physics_mode(True) # to speed up simulation
     world.tick()
 
 
@@ -303,12 +494,7 @@ def run(args):
 
     ### --------------------- Simulation setup --------------------- ###
 
-    # Set the seeds for determinism
-    random.seed(args.seed)
-    traffic_manager.set_random_device_seed(args.seed)
-    # Set the seed value for pedestrian ** positions **
-    # TODO
-    # world.set_pedestrian_seed(args.seed)
+
 
     bp_lib = world.get_blueprint_library()
     spawn_points = world.get_map().get_spawn_points() # spawn points may be occupied already
@@ -327,7 +513,7 @@ def run(args):
     ego_sensors = {} # Each key is a sensor type, and the value is a dictionary of sensors representing a 360 view. Use the `role_name` attribute to distinguish between them.
     ego_sensor_queues = {} # Each key is a sensor type, and the value is a dictionary of queues to hold the images from the sensor.
     # TODO: add the other sensors
-    for sensor in ['sensor.camera.rgb', 'sensor.camera.semantic_segmentation', 'sensor.camera.depth', 'sensor.camera.instance_segmentation']:
+    for sensor in ['sensor.camera.rgb', 'sensor.camera.semantic_segmentation', 'sensor.camera.depth']:
         sensors_360, queues_360 = attach_sensor(ego_vehicle, sensor, height=1.75, fps=args.fps)
         ego_sensors[sensor] = sensors_360
         ego_sensor_queues[sensor] = queues_360
@@ -338,42 +524,54 @@ def run(args):
     weather_profile = random.choice(['ClearNoon', 'CloudyNoon', 'WetNoon', 'WetCloudyNoon', 'SoftRainNoon', 'MidRainyNoon', 'HardRainNoon', 'ClearSunset', 'CloudySunset', 'WetSunset', 'WetCloudySunset', 'SoftRainSunset', 'MidRainSunset', 'HardRainSunset'])
     time_and_weather_instance = set_weather_and_time_of_day(profile=weather_profile)
 
-    # set the buidlings (do nothing if no edits are specified)
-    # TODO
+
     # set the NPC actors (random if no edits are specified).
     vehicles = spawn_vehicle_actors(spawn_points, vehicle_blueprints, getattr(args, 'num_vehicle_actors', None))
+    walkers = spawn_walker_actors(spawn_points, walker_blueprints, getattr(args, 'num_walker_actors', None))
 
     tracker = MetadataTracker_simple(world, args.run_output_dir)
-    # spawn_walker_actors(num_actors=10, spawn_points=spawn_points, walker_blueprints=walker_blueprints)
-    # valid spawn points (translating vehicles??)
-    # NPC vehicles, pedestrians, etc. Apply traffic manager.
-    # TODO
+
     ### note that pedestrians are controlled by an AI, not a traffic manager. This also needs to be set.
     ### pedestrians use different spawn points than vehicles. see docs
 
     ## animations
-    animate_vehicle_actors(vehicles)
+    if vehicle_positions_tracker is not None and vehicle_positions_tracker.is_active():
+        logger.info("Disabling autopilot for NPCs since setting positions using tracker is active.")
+    else:
+        animate_vehicle_actors(vehicles)
     animate_ego_vehicle(ego_vehicle)
 
 
-    
+    add_texture_to_roads()
+    add_texture_to_buildings()
+    add_texture_to_sidewalks()
     try:
 
-        def tick_world():
-            """Wrapper function for world.tick() to detect when the simulation advances. To use in the for-loop to run simulation"""
+        def tick_world(tick=None):
+            """Wrapper function for world.tick() to advance the simulation. To use in the for-loop to run simulation.
+            
+            Returns the frame ID of the new frame computed by the server."""
+            if tick is not None and vehicle_positions_tracker is not None and vehicle_positions_tracker.is_active():
+                # vehicle_positions_tracker.set_location([ego_vehicle] + vehicles, tick)
+                vehicle_positions_tracker.set_location_batch(vehicles, tick, client)
+
             frame_id = world.tick()
             logger.verbose_debug(f"World ticked. Frame ID: {frame_id}")
-            time_and_weather_instance.tick(world.get_settings().fixed_delta_seconds)
+            # time_and_weather_instance.tick(world.get_settings().fixed_delta_seconds)
             logger.verbose_debug(str(time_and_weather_instance))
+
+            if tick is not None and vehicle_positions_tracker is not None and not vehicle_positions_tracker.is_active():
+                vehicle_positions_tracker.track_positions(vehicles, tick)
+            # print("Frame ID: ", frame_id)
             return frame_id
 
         ### --------------------- Run the simulation --------------------- ###
 
         # Do a few ticks to get the simulation started
-        for _ in range(10):
+        for _ in range(5):
             tick_world()
 
-        activate_sensors(ego_sensors, ego_sensor_queues)
+        activate_sensors(ego_sensors, ego_sensor_queues, args.run_output_dir, tracker=tracker)
         world.tick() # tick once to activate the sensors
         logger.debug('Activated sensors.')
 
@@ -382,31 +580,30 @@ def run(args):
         total_seconds = args.length
         num_ticks = math.ceil(total_seconds / world.get_settings().fixed_delta_seconds)
         logger.info(f"Total seconds: {total_seconds}, Num ticks: {num_ticks}")
-        for _ in range(num_ticks):
-            frame_id = tick_world() # returns the id of the new frame computed by the server
-            save_images_from_queues(ego_sensor_queues, args.run_output_dir, tracker)
-            # Track the metadata of the simulation
-            # TODO
+        for _ in tqdm(range(num_ticks), desc="Simulating frames"):
+            frame_id = tick_world(_)
+            if _ % 20 == 0 or _ == num_ticks - 1:
+                save_images_from_queues(ego_sensor_queues, args.run_output_dir, tracker, frame_id)
+
+
 
     finally:
+        logger.info('stopping sensors')
+        stop_sensors(ego_sensors)
+    
+        tracker.save_args(args)
         tracker.save_metadata()
 
-        logger.info('stopping and destroying sensors')
-        stop_and_destroy_sensors(ego_sensors)
-
-
-
-        logger.info('destroying actors')
-
-        # TODO: destroy the actors (walkers, vehicles, etc.)
+        # logger.info('destroying actors')
+        # # TODO: destroy the actors (walkers, vehicles, etc.)
         # actor_list = list(world.get_actors()) # causes simulation to shut down
-        actor_list = [ego_vehicle] + vehicles
-        batch = [carla.command.DestroyActor(x) for x in actor_list]
-        results = client.apply_batch_sync(batch, True)
-        for i, result in enumerate(results):
-            if result.error:
-                logger.error(f"Failed to destroy actor {actor_list[i].id}: {result.error}")
-        
+        # # actor_list = [ego_vehicle] + vehicles + walkers
+        # batch = [carla.command.DestroyActor(x) for x in actor_list]
+        # results = client.apply_batch_sync(batch, True)
+        # for i, result in enumerate(results):
+        #     if result.error:
+        #         logger.error(f"Failed to destroy actor {actor_list[i].id}: {result.error}")
+
         # Always disable sync mode before the script ends to prevent the server blocking whilst waiting for a tick
         logger.info('Disabling synchronous mode')
         settings = world.get_settings()
@@ -416,7 +613,19 @@ def run(args):
         world.apply_settings(settings)
         logger.debug('Synchronous mode: %s', settings.synchronous_mode)
         assert not world.get_settings().synchronous_mode, "Synchronous mode not disabled."
+
+
+
+        traffic_manager.shut_down()
+
+        client.reload_world()
+        # workaround: give time to UE4 to clean memory after loading (old assets)
+        time.sleep(5)
+        
+        
+    world.apply_settings(old_settings)
     logger.info('done.')
+    # time.sleep(5) # give time for the simulation to shut down
 
 
 
@@ -424,21 +633,32 @@ def run(args):
 def main(args):
     """Main method"""
 
-    # set the seeds for determinism
-    seed_value_1 = 1234
-    random.seed(seed_value_1)
-    np.random.seed(seed_value_1)
+    if args.seed_edit is None:
+        args.seed_edit = random.randint(0, 2**32 - 1)
+    logging.info(f"Using global edit seed {args.seed_edit}")
+
+    if args.seed is None:
+        args.seed = random.randint(0, 2**32 - 1)
+    logging.info(f"Using simulation seed {args.seed}")
+
+    random.seed(args.seed_edit)
+    np.random.seed(args.seed_edit)
     # TODO: etc...
+    
 
     trial_output_dir = prepare_output_dir(args.output)
     args.output = trial_output_dir
 
+    if args.port is not None:
+        if args.tm_port is None:
+            args.tm_port = (int(args.port) + 3000)
+        logger.info('Using traffic manager port: %s', args.tm_port)
     global world, client, editor
-    client = carla.Client('localhost', 2000)
+    client = carla.Client(args.host, int(args.port))
+    client.set_timeout(60.0) 
     world = client.get_world()
     editor = Editor(world, args, client)
 
-    # load world by sampling a random map unless specified
     maps = client.get_available_maps()
     logger.debug('Available maps: %s', maps)
     if args.map:
@@ -447,11 +667,17 @@ def main(args):
         map_name = random.choice(maps)
     world = client.load_world(map_name)
     logger.info('Loaded map: %s', map_name)
+    # workaround: give time to UE4 to clean memory after loading (old assets)
+    time.sleep(5)
 
 
     # save random state:
     random_state = random.getstate()
     np_random_state = np.random.get_state()
+
+    # to guarantee determinism in actor positions:
+    vehicle_pos_tracker = PositionTracker("vehicles") ## very slow
+    # vehicle_pos_tracker = None
 
     ### ---------------------- main edit loop ---------------------- ###
     for r in range(2):
@@ -466,9 +692,10 @@ def main(args):
         if r == 0:
             pass
             editor.set_recording_mode()
+            if vehicle_pos_tracker is not None: vehicle_pos_tracker.deactivate()
             # simulate
             # TODO: any return values?
-            run(args)
+            run(args, vehicle_positions_tracker=vehicle_pos_tracker)
         else:
             pass
             # restore the random state
@@ -478,6 +705,7 @@ def main(args):
             logger.info('Sampling an editing operation.')
             sample_editing_operation(args)
             editor.edit()
+            if vehicle_pos_tracker is not None: vehicle_pos_tracker.activate()
             # TODO
             # save the random state
             random_state = random.getstate()
@@ -485,12 +713,29 @@ def main(args):
 
             # simulate
             # TODO: any return values?
-            run(args)
+            print("Reloading world")
+            # client.reload_world()
+            # workaround: give time to UE4 to clean memory after loading (old assets)
+            # time.sleep(5)
+            print("World reloaded")
+            run(args, vehicle_positions_tracker=vehicle_pos_tracker)
+        if vehicle_pos_tracker is not None: vehicle_pos_tracker.reset_but_keep_record()
 
-        # create a video from the images
+
+
         create_video_from_images(f"{args.run_output_dir}/sensor.camera.rgb/front", args.output, fps=args.fps)
+        create_video_from_images(f"{args.run_output_dir}/sensor.camera.depth/front", args.output, fps=args.fps)
         logger.info('Created video from images.')
 
+
+
+    editor = None
+    del editor
+    client = None
+    del client
+    world = None
+    del world
+    gc.collect()
 
 
     
@@ -527,9 +772,15 @@ if __name__ == '__main__':
     argparser.add_argument(
         '-s', '--seed',
         metavar='int',
-        default='1234',
+        default=None,
         type=int,
         help='The seed value for the simulation')
+    argparser.add_argument(
+        '--seed_edit',
+        metavar='int',
+        default=None,
+        type=int,
+        help='The seed value for editing and setting up the world before simulations')
     argparser.add_argument(
         '-m', '--map',
         metavar='MAP',
@@ -549,8 +800,14 @@ if __name__ == '__main__':
         '-e', '--edit',
         metavar='EDIT',
         default='random',
-        choices=['random', 'time_of_day', 'weather', 'weather_and_time_of_day', 'lane_marking', 'building_texture', 'vehicle_lights', 'vehicle_color', 'vehicle_replacement', 'vehicle_deletion', 'building_deletion', 'pedestrian_deletion'],
+        choices=['random'] + EDITS,
         help='The edit to apply to the simulation')
+    argparser.add_argument(
+        '--tm_port',
+        metavar='PORT',
+        default=None,
+        type=int,
+        help='The port of the traffic manager server. If None, and the host server port is set, then host server port + 1 is used.')
     
     args = argparser.parse_args()
 
