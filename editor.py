@@ -189,7 +189,7 @@ class Editor():
             edits_to_insert[k] = v
 
         self.edits_to_insert = edits_to_insert
-        print(self.records)
+        # print(self.records)
 
     def edit_time_of_day(self):
         """sample a time of day and add it to a weather object"""
@@ -221,13 +221,13 @@ class Editor():
         weather_kwargs = self.records['weather']
         if 'profile' in weather_kwargs:
             old_profile = weather_kwargs['profile']
-            print(old_profile)
+            # print(old_profile)
             if old_profile.endswith('Sunset'):
                 options = ['ClearSunset', 'CloudySunset', 'WetSunset', 'WetCloudySunset', 'SoftRainSunset', 'MidRainSunset', 'HardRainSunset']
             else:
                 options = ['ClearNoon', 'CloudyNoon', 'WetNoon', 'WetCloudyNoon', 'SoftRainNoon', 'MidRainyNoon', 'HardRainNoon']
             options.remove(old_profile)
-            print(options)
+            # print(options)
             new_profile = random.choice(options)
             return 'weather', {'profile': new_profile}
         else:

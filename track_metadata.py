@@ -60,7 +60,7 @@ class MetadataTracker_simple():
         entry['world_frame'] = frame # to map to sensors
         entry['frame_number'] = self.get_frame_number(frame)
         world_snapshot = self.world.get_snapshot()
-        assert world_snapshot.frame == frame
+        # assert world_snapshot.frame == frame
         # for actor_snapshot in world_snapshot: ### for all actors
         vehicle_actors = self.world.get_actors().filter('vehicle.*')
         walker_actors = self.world.get_actors().filter('walker.*')
@@ -158,6 +158,12 @@ class MetadataTracker_simple():
             return 'sensor'
         else:
             return 'traffic'
+        
+    def remove_frame_not_listed(self, frames_to_keep):
+        """
+        Remove all frames that are not in the list of *world* frame ids  to keep.
+        """
+        self.metadata = [entry for entry in self.metadata if entry['world_frame'] in frames_to_keep]
 
     def save_metadata(self):
         """

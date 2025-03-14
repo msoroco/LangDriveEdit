@@ -28,18 +28,17 @@ EDITS = [
     'time_of_day',
     'weather',
     'weather_and_time_of_day',
-    'lane_marking',
+    # 'lane_marking',
     'building_texture',
-    'vehicle_lights',
+    # 'vehicle_lights',
     'vehicle_color',
     'vehicle_replacement',
     'vehicle_deletion',
     'walker_color',
     'walker_replacement',
     'walker_deletion',
-    'building_deletion',
+    # 'building_deletion',
     'road_texture',
-    'building_texture'
 ]
 
 VERBOSE = 5
@@ -157,18 +156,21 @@ def activate_sensors(sensors, sensor_queues, output_dir=None, tracker=None):
         logger.verbose_debug(f'Saved image to disk: {name}')
 
     def add_to_queue(image, sensor_queue, tracker=None):
-        sensor_queue.put(image)
         if tracker is not None:
             tracker.track_metadata(image.frame)
+        sensor_queue.put(image)
+
 
     logger.debug('Activating sensors and saving images to queues.')
     for sensor_type, sensor_dict in sensors.items():
         for role, sensor_view in sensor_dict.items():
             sensor_queue = sensor_queues[sensor_type][role]
-            if sensor_type == 'sensor.camera.rgb' and role == 'front':
-                sensor_view.listen(lambda image, sq=sensor_queue: add_to_queue(image, sq, tracker))
-            else:
-                sensor_view.listen(sensor_queue.put)
+            # if sensor_type == 'sensor.camera.rgb' and role == 'front':
+            #     sensor_view.listen(lambda image, sq=sensor_queue: add_to_queue(image, sq, tracker))
+            # else:
+            #     sensor_view.listen(sensor_queue.put)
+
+            sensor_view.listen(sensor_queue.put)
             # sensor_view.listen(lambda image, st=sensor_type, r=role, o=output_dir: save_to_disk(image, st, r, o))
             logger.debug('Activated %s sensor: %s', sensor_type, sensor_view)
 
@@ -187,6 +189,7 @@ def save_images_from_queues(sensor_queues, output_dir, tracker, frame_id):
             image.save_to_disk(path, cc)
         logger.verbose_debug(f'Saved image to disk: {name}')
 
+    frames_saved = []
     for sensor_type, queue_dict in sensor_queues.items():
         sensor_directory = os.path.join(output_dir, sensor_type)
         os.makedirs(sensor_directory, exist_ok=True)
@@ -199,7 +202,10 @@ def save_images_from_queues(sensor_queues, output_dir, tracker, frame_id):
                 #     cc = carla.ColorConverter.Depth
                 #     save_to_disk(image, sensor_type, role, sensor_view_subdirectory, cc)
                 #     continue
-                save_to_disk(image, sensor_type, role, sensor_view_subdirectory)            
+                save_to_disk(image, sensor_type, role, sensor_view_subdirectory)  
+                if image.frame not in frames_saved:
+                    frames_saved.append(image.frame)
+    return frames_saved          
                 
 
 def stop_sensors(sensors):
@@ -377,7 +383,7 @@ def animate_vehicle_actors(vehicles):
     """Animates the vehicle actors in the simulation."""
     logger.debug('Animating NPC vehicle actors.')
     for vehicle in vehicles:
-        vehicle.set_autopilot(True)
+        vehicle.set_autopilot(True, args.tm_port)
         logger.verbose_debug(f'Animating vehicle actor: {vehicle}. {vehicle.attributes}')
     world.tick() # tick once to make sure the vehicles are animating
     logger.info('Animated all NPC vehicle actors.')
@@ -385,7 +391,7 @@ def animate_vehicle_actors(vehicles):
 def animate_ego_vehicle(ego_vehicle):
     """Animates the ego vehicle actor in the simulation."""
     logger.debug('Animating ego vehicle actor.')
-    ego_vehicle.set_autopilot(True)
+    ego_vehicle.set_autopilot(True, args.tm_port)
     world.tick() # tick once to make sure the ego vehicle is animating
     logger.info('Animated ego vehicle actor.')
     
@@ -474,7 +480,7 @@ def run(args, **kwargs):
     logger.debug("Synchronous mode: %s", settings.synchronous_mode)
     assert world.get_settings().synchronous_mode, "Synchronous mode not set."
     # set the Traffic Manager to sync mode
-    traffic_manager = client.get_trafficmanager(args.tm_port)
+    traffic_manager = client.get_trafficmanager(int(args.tm_port))
     traffic_manager.set_synchronous_mode(True)
     # Set the seeds for determinism
     random.seed(args.seed)
@@ -580,12 +586,27 @@ def run(args, **kwargs):
         total_seconds = args.length
         num_ticks = math.ceil(total_seconds / world.get_settings().fixed_delta_seconds)
         logger.info(f"Total seconds: {total_seconds}, Num ticks: {num_ticks}")
-        for _ in tqdm(range(num_ticks), desc="Simulating frames"):
-            frame_id = tick_world(_)
-            if _ % 20 == 0 or _ == num_ticks - 1:
-                save_images_from_queues(ego_sensor_queues, args.run_output_dir, tracker, frame_id)
-
-
+        frames_saved = []
+        # for _ in tqdm(range(num_ticks), desc="Simulating frames"):
+        #     frame_id = tick_world(_)
+        #     if _ % 20 == 0 or _ == num_ticks - 1:
+        #         frames_saved_subsample = save_images_from_queues(ego_sensor_queues, args.run_output_dir, tracker, frame_id)
+        #         frames_saved.extend(frames_saved_subsample)
+        #     if tracker is not None:
+        #         tracker.track_metadata(frame_id)
+        #     print(frame_id)
+        with tqdm(range(num_ticks), desc="Simulating frames") as pbar:
+            for i in pbar:
+                frame_id = tick_world(i)
+                pbar.set_description(f"Simulating frames {frame_id}")
+                if i % 20 == 0 or i == num_ticks - 1:
+                    frames_saved_subsample = save_images_from_queues(ego_sensor_queues, args.run_output_dir, tracker, frame_id)
+                    frames_saved.extend(frames_saved_subsample)
+                if tracker is not None:
+                    tracker.track_metadata(frame_id)
+                    
+        frames_saved = list(set(frames_saved)) # unique
+        tracker.remove_frame_not_listed(frames_saved)
 
     finally:
         logger.info('stopping sensors')
@@ -632,7 +653,6 @@ def run(args, **kwargs):
 
 def main(args):
     """Main method"""
-
     if args.seed_edit is None:
         args.seed_edit = random.randint(0, 2**32 - 1)
     logging.info(f"Using global edit seed {args.seed_edit}")
@@ -651,7 +671,7 @@ def main(args):
 
     if args.port is not None:
         if args.tm_port is None:
-            args.tm_port = (int(args.port) + 3000)
+            args.tm_port = int(int(args.port) + 3000)
         logger.info('Using traffic manager port: %s', args.tm_port)
     global world, client, editor
     client = carla.Client(args.host, int(args.port))
@@ -713,18 +733,17 @@ def main(args):
 
             # simulate
             # TODO: any return values?
-            print("Reloading world")
+            # print("Reloading world")
             # client.reload_world()
             # workaround: give time to UE4 to clean memory after loading (old assets)
             # time.sleep(5)
-            print("World reloaded")
+            # print("World reloaded")
             run(args, vehicle_positions_tracker=vehicle_pos_tracker)
         if vehicle_pos_tracker is not None: vehicle_pos_tracker.reset_but_keep_record()
 
 
 
         create_video_from_images(f"{args.run_output_dir}/sensor.camera.rgb/front", args.output, fps=args.fps)
-        create_video_from_images(f"{args.run_output_dir}/sensor.camera.depth/front", args.output, fps=args.fps)
         logger.info('Created video from images.')
 
 
@@ -736,7 +755,7 @@ def main(args):
     world = None
     del world
     gc.collect()
-
+    return args, trial_output_dir
 
     
 
@@ -826,7 +845,15 @@ if __name__ == '__main__':
 
 
     try:
-        main(args)
+        output = args.output
+        args, trial_output_dir = main(args)
+
+        # open a txt file to write the output directory and sampled edit
+        with open(os.path.join(output, 'description.txt'), 'a') as f:
+            # output basename
+            basename = os.path.basename(trial_output_dir)
+            f.write(f"Directory: {basename}, Edit: {args.edit}\n")
+
     finally:
         # delete the output directory if it is empty
         delete_empty_dirs(args.output)
