@@ -125,6 +125,15 @@ class Editor():
                     for edit in edits:
                         road_object = edit['road']
                         road_texture = edit['texture']
+                        rotation = edit['rotation']
+                        # TODO: height and width
+                        self.apply_texture(road_object, road_texture, rotate=rotation)
+            elif key == 'sidewalk_texture':    
+                if getattr(self.args, 'sidewalk_texture', False):
+                    edits = self.edits_to_insert['sidewalk_texture']
+                    for edit in edits:
+                        road_object = edit['sidewalk']
+                        road_texture = edit['texture']
                         # TODO: height and width
                         self.apply_texture(road_object, road_texture)
             
@@ -132,8 +141,10 @@ class Editor():
                 if getattr(self.args, 'building_texture', False):
                     building_object = editable_object['building']
                     building_texture = editable_object['texture']
+                    integer = editable_object['integer']
+                    rotation = 90 * (integer % 4)
                     # TODO: height and width
-                    self.apply_texture(building_object, building_texture)
+                    self.apply_texture(building_object, building_texture, rotate=rotation)
         else:       
             return editable_object
             
@@ -162,6 +173,9 @@ class Editor():
         #     edits_to_insert[k] = v
         if getattr(self.args, 'road_texture', False):
             k, v = self.edit_road_texture()
+            edits_to_insert[k] = v
+        if getattr(self.args, 'sidewalk_texture', False):
+            k, v = self.edit_sidewalk_texture()
             edits_to_insert[k] = v
         if getattr(self.args, 'vehicle_lights', False):
             k, v = self.edit_vehicle_lights()
@@ -389,19 +403,36 @@ class Editor():
     def edit_road_texture(self):
         dictionary = self.records['road_texture']
         roads = dictionary['roads']
-        road_texture_dir = os.path.join('textures', 'road')
+        road_texture_dir = os.path.join(os.path.dirname(__file__), 'textures', 'road')
         texture_files = os.listdir(road_texture_dir)
         edits = []
+        texture_file = random.choice(texture_files)
         for road in roads:
-            texture_file = random.choice(texture_files)
+            # texture_file = random.choice(texture_files)
+            rotation = random.choice([0, 90, 180, 270])
             texture_path = os.path.join(road_texture_dir, texture_file)
-            edits.append({'road': road, 'texture': texture_path})
+            edits.append({'road': road, 'texture': texture_path, 'rotation': rotation})
         return 'road_texture', edits
 
+    def edit_sidewalk_texture(self):
+        dictionary = self.records['sidewalk_texture']
+        roads = dictionary['sidewalks']
+        road_texture_dir = os.path.join(os.path.dirname(__file__), 'textures', 'road')
+        texture_files = os.listdir(road_texture_dir)
+        edits = []
+        texture_file = random.choice(texture_files)
+        for road in roads:
+            # texture_file = random.choice(texture_files)
+            texture_path = os.path.join(road_texture_dir, texture_file)
+            edits.append({'sidewalk': road, 'texture': texture_path})
+        return 'sidewalk_texture', edits
 
 
-    def apply_texture(self, object_to_edit, texture_path, height=256, width=256):
+    def apply_texture(self, object_to_edit, texture_path, height=256, width=256, rotate=0):
         image = Image.open(texture_path)
+        image = image.convert("RGB")
+        # rotate the image by rotate degrees:
+        image = image.rotate(rotate)
         # image = Image.open('/home/mai/msoroco/carla/grass_texture.jpeg')
         image = image.resize((width, height))
         height = image.size[1]
