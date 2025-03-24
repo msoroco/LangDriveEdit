@@ -1,5 +1,6 @@
 import json
 import os
+import random
 from re import match
 from collections import Counter
 import carla
@@ -64,10 +65,10 @@ class MetadataTracker_simple():
         # for actor_snapshot in world_snapshot: ### for all actors
         vehicle_actors = self.world.get_actors().filter('vehicle.*')
         walker_actors = self.world.get_actors().filter('walker.*')
-        # traffic_actors = self.world.get_actors().filter('traffic.*')
+        traffic_actors = self.world.get_actors().filter('traffic.traffic_light')
         sensor_actors = self.world.get_actors().filter('sensor.*')
 
-        all_actors = list(vehicle_actors) + list(walker_actors) + list(sensor_actors) #+ list(traffic_actors)
+        all_actors = list(vehicle_actors) + list(walker_actors) + list(sensor_actors) + list(traffic_actors)
 
         for actual_actor in all_actors:
             actual_actor_id = actual_actor.id
@@ -309,6 +310,90 @@ class PositionTracker():
 
 
 
+class LightTracker(PositionTracker):
+    def __init__(self, label):
+        super().__init__(label)
+        self.permutation = self.generate_random_mapping()
+
+    def get_permutation(self):
+        return self.permutation
+
+    def generate_random_mapping(self):
+        """ Mapping of [red, yellow, green] to new traffic light colours"""
+        bernoulli = random.random()
+        if bernoulli > 0.5:
+            return ['yellow', 'green', 'red']
+        else:
+            return ['green', 'red', 'yellow']
+
+    def track_light_states(self, actor_list, frame_id):
+        """
+        If inactive: track the light colour of the traffic lights in the world.
+        """
+        if not self.active:
+            frame = self.get_frame_number(frame_id)
+            for i, actor in enumerate(actor_list):
+                state = actor.get_state()
+                if state == carla.TrafficLightState.Red:
+                    state = 'red'
+                elif state == carla.TrafficLightState.Yellow:
+                    state = 'yellow'
+                elif state == carla.TrafficLightState.Green:
+                    state = 'green'
+                else:
+                    state = 'off' # or unknown
+
+                if i not in self.simulation_record:
+                    self.simulation_record[i] = {}
+                self.simulation_record[i].update({frame: state})
+
+    def set_light_states(self, actor_list, frame_id):
+        """
+        If active: Set the light colour of the traffic lights in the world.
+        """
+        if self.active:
+            frame = self.get_frame_number(frame_id)
+            records = self.simulation_record_copy
+            for i, actor in enumerate(actor_list):
+                state = records[i][frame]
+                if state == 'red':
+                    new_state = self.permutation[0]
+                elif state == 'yellow':
+                    new_state = self.permutation[1]
+                elif state == 'green':
+                    new_state = self.permutation[2]
+                else:
+                    new_state = 'yellow' # least likely colour
+
+                if new_state == 'red':
+                    actor.set_state(carla.TrafficLightState.Red)
+                elif new_state == 'yellow':
+                    actor.set_state(carla.TrafficLightState.Yellow)
+                elif new_state == 'green':
+                    actor.set_state(carla.TrafficLightState.Green)
+
+    # def set_light_states_batch(self, actor_list, frame_id, client):
+    #     """
+    #     If active: Set the light colour of the traffic lights in the world.
+    #     """
+    #     if self.active:
+    #         frame = self.get_frame_number(frame_id)
+    #         records = self.simulation_record_copy
+    #         batch = []
+    #         for i, actor in enumerate(actor_list):
+    #             state = records[i][frame]
+    #             if state == 'red':
+    #                 new_state = carla.TrafficLightState.Yellow
+    #             elif state == 'yellow':
+    #                 new_state = carla.TrafficLightState.Green
+    #             elif state == 'green':
+    #                 new_state = carla.TrafficLightState.Red
+    #             else:
+    #                 new_state = carla.TrafficLightState.Yellow
+    #             batch.append(command.SetTrafficLightState(actor.id, new_state))
+
+    #         # Apply the batch of commands synchronously
+    #         client.apply_batch_sync(batch, False)
 
 
 
