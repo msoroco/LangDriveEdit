@@ -18,7 +18,7 @@ import argparse
 
 from weather_time import time_and_weather
 from utils import create_video_from_images
-from track_metadata import MetadataTracker_simple, PositionTracker #MetadataTracker
+from track_metadata import MetadataTracker_simple, PositionTracker, LightTracker #MetadataTracker
 from editor import Editor
 
 world = None
@@ -39,6 +39,8 @@ EDITS = [
     'walker_deletion',
     # 'building_deletion',
     'road_texture',
+    # 'sidewalk_texture',
+    'traffic_light_state',
 ]
 
 VERBOSE = 5
@@ -266,7 +268,9 @@ def spawn_vehicle_actors(spawn_points, vehicle_blueprints, num_actors=None, posi
         `num_actors` is the number of actors to spawn. If None, a random number will be chosen.
     """
     if num_actors is None:
-        num_actors = random.randint(1, 30)
+        num_actors = random.randint(10, 30)
+        if 'vehicle' in args.edit:
+            num_actors = random.randint(25, 40)
     logger.debug(f'Spawning {num_actors} vehicle actors.')
 
     spawn_points = random.sample(spawn_points, num_actors)
@@ -326,25 +330,42 @@ def spawn_vehicle_actors(spawn_points, vehicle_blueprints, num_actors=None, posi
     logger.info(f'Spawned {len(vehicles)} vehicle actors.')
     return vehicles
 
-def spawn_walker_actors(spawn_points, walker_blueprints, num_actors=None):
+def spawn_walker_actors(spawn_points, walker_blueprints, num_actors=None, ego_vehicle=None):
     """Spawns walker actors in the simulation.
         `num_actors` is the number of actors to spawn.
         `spawn_points` is a list of spawn points.
         `walker_blueprints` is a list of walker blueprints.
     """
     if num_actors is None:
-        num_actors = random.randint(0, 30)
+        num_actors = random.randint(10, 40)
+        if 'walker' in args.edit:
+            num_actors = random.randint(55, 75)
     
-    spawn_points = []
-    for _ in range(num_actors):
-        for attempt in range(10):
-            spawn_location = world.get_random_location_from_navigation()
-            if spawn_location:
-                spawn_transform = carla.Transform(spawn_location)
-                spawn_points.append(spawn_transform)
-                break
+    if ego_vehicle is None:
+        spawn_points = []
+        for _ in range(num_actors):
+            for attempt in range(10):
+                spawn_location = world.get_random_location_from_navigation()
+                if spawn_location:
+                    random_yaw = random.uniform(0, 360)
+                    spawn_transform = carla.Transform(spawn_location, carla.Rotation(yaw=random_yaw))
+                    spawn_points.append(spawn_transform)
+                    break
+    else:
+        ego_location = ego_vehicle.get_location()
+        spawn_points = []
+        for _ in range(num_actors):
+            for attempt in range(20):
+                spawn_location = world.get_random_location_from_navigation()
+                if spawn_location:
+                    distance = ego_location.distance(spawn_location)
+                    if distance <= 100:  # Check if within 100 meters
+                        random_yaw = random.uniform(0, 360)
+                        spawn_transform = carla.Transform(spawn_location, carla.Rotation(yaw=random_yaw))
+                        spawn_points.append(spawn_transform)
+                        break
 
-    walker_types = [random.choice(walker_blueprints) for _ in range(num_actors)]
+    walker_types = [random.choice(walker_blueprints) for _ in range(num_actors)]    
     walker_names = [walker.id for walker in walker_types]
     indices = []
     walkers = []
@@ -353,7 +374,7 @@ def spawn_walker_actors(spawn_points, walker_blueprints, num_actors=None):
     walker_names = dict['walker_names']
     spawn_points = dict['spawn_points']
     if len(walker_names) > len(spawn_points):
-        walker_names = walker_names[:spawn_points]
+        walker_names = walker_names[:len(spawn_points)]
     logger.debug(f'Spawning {num_actors} walker actors.')
 
     spawned_walker_names = []
@@ -412,18 +433,25 @@ def add_texture_to_buildings():
     filtered_names = list(filter(lambda k: any(sub in k for sub in include_substrings) and not any(sub in k for sub in exclude_substrings), names))
     
     texture_files = [
+        'black_brick.jpg',
         'blue_glass.jpg',
+        'bluish_brick.jpg',
         'brown_rock.jpeg',
         'grey_cement.jpg',
+        'light_brick.jpg',
+        'metal_panels2.jpeg',
         'metal_panels.jpeg',
-        'red_brick.jpeg'
+        'red-brick2.jpg',
+        'red_brick.jpeg',
     ]
     
     for name in filtered_names:
         texture = random.choice(texture_files)
-        texture_path = os.path.join('textures', 'building', texture)
+        integer = random.randint(0, 100)
+        # texture_path = os.path.join('textures', 'building', texture)
+        texture_path = os.path.join(os.path.dirname(__file__), 'textures', 'building', texture)
         # editor.record('building_texture', {'building': name, 'texture': texture_path})
-        editor.apply('building_texture', {'building': name, 'texture': texture_path})
+        editor.apply('building_texture', {'building': name, 'texture': texture_path, 'integer': integer})
 
         
 def add_texture_to_roads():
@@ -438,7 +466,6 @@ def add_texture_to_roads():
     editor.record('road_texture', {'roads': filtered_names})
     editor.apply('road_texture', {'roads': filtered_names})
 
-
     # for name in filtered_names:
     #     texture = random.choice(texture_files)
     #     texture_path = os.path.join('textures', 'road', texture)
@@ -448,7 +475,20 @@ def add_texture_to_roads():
 
 def add_texture_to_sidewalks():
     """Adds textures to the sidewalks in the simulation."""
-    pass
+    names = world.get_names_of_all_objects()
+    include_substrings = ['Lane', 'Sidewalk' ]
+    exclude_substrings = ['Lights', 'Win', 'Door', 'Crosswalk', 'Grass', 'Gutter', 'Curb']
+    filtered_names = list(filter(lambda k: any(sub in k for sub in include_substrings), names))
+    editor.record('sidewalk_texture', {'sidewalks': filtered_names})
+    editor.apply('sidewalk_texture', {'sidewalks': filtered_names})
+
+
+def get_trafficlight_actors():
+    # get all traffic lights:
+    list_tl = world.get_actors().filter('traffic.traffic_light')
+    return list_tl
+
+
 
 
 
@@ -457,6 +497,7 @@ def run(args, **kwargs):
     world = client.get_world()
 
     vehicle_positions_tracker = kwargs.get('vehicle_positions_tracker', None)
+    traffic_light_tracker = kwargs.get('traffic_light_tracker', None)
     
     # set synchronous mode
     old_settings = world.get_settings()
@@ -528,12 +569,13 @@ def run(args, **kwargs):
 
     # set the weather and time of day
     weather_profile = random.choice(['ClearNoon', 'CloudyNoon', 'WetNoon', 'WetCloudyNoon', 'SoftRainNoon', 'MidRainyNoon', 'HardRainNoon', 'ClearSunset', 'CloudySunset', 'WetSunset', 'WetCloudySunset', 'SoftRainSunset', 'MidRainSunset', 'HardRainSunset'])
+    args.weather_profile = weather_profile
     time_and_weather_instance = set_weather_and_time_of_day(profile=weather_profile)
 
 
     # set the NPC actors (random if no edits are specified).
     vehicles = spawn_vehicle_actors(spawn_points, vehicle_blueprints, getattr(args, 'num_vehicle_actors', None))
-    walkers = spawn_walker_actors(spawn_points, walker_blueprints, getattr(args, 'num_walker_actors', None))
+    walkers = spawn_walker_actors(spawn_points, walker_blueprints, getattr(args, 'num_walker_actors', None), ego_vehicle)
 
     tracker = MetadataTracker_simple(world, args.run_output_dir)
 
@@ -542,10 +584,10 @@ def run(args, **kwargs):
 
     ## animations
     if vehicle_positions_tracker is not None and vehicle_positions_tracker.is_active():
-        logger.info("Disabling autopilot for NPCs since setting positions using tracker is active.")
+        logger.info("Disabling autopilot for NPCs and Ego since setting positions using tracker is active.")
     else:
         animate_vehicle_actors(vehicles)
-    animate_ego_vehicle(ego_vehicle)
+        animate_ego_vehicle(ego_vehicle)
 
 
     add_texture_to_roads()
@@ -559,7 +601,9 @@ def run(args, **kwargs):
             Returns the frame ID of the new frame computed by the server."""
             if tick is not None and vehicle_positions_tracker is not None and vehicle_positions_tracker.is_active():
                 # vehicle_positions_tracker.set_location([ego_vehicle] + vehicles, tick)
-                vehicle_positions_tracker.set_location_batch(vehicles, tick, client)
+                vehicle_positions_tracker.set_location_batch([ego_vehicle] + vehicles, tick, client)
+            if tick is not None and traffic_light_tracker is not None and traffic_light_tracker.is_active():
+                traffic_light_tracker.set_light_states(get_trafficlight_actors(), tick)
 
             frame_id = world.tick()
             logger.verbose_debug(f"World ticked. Frame ID: {frame_id}")
@@ -567,7 +611,9 @@ def run(args, **kwargs):
             logger.verbose_debug(str(time_and_weather_instance))
 
             if tick is not None and vehicle_positions_tracker is not None and not vehicle_positions_tracker.is_active():
-                vehicle_positions_tracker.track_positions(vehicles, tick)
+                vehicle_positions_tracker.track_positions([ego_vehicle] + vehicles, tick)
+            if tick is not None and traffic_light_tracker is not None and not traffic_light_tracker.is_active():
+                traffic_light_tracker.track_light_states(get_trafficlight_actors(), tick)
             # print("Frame ID: ", frame_id)
             return frame_id
 
@@ -684,7 +730,14 @@ def main(args):
     if args.map:
         map_name = args.map
     else:
+        if args.edit == 'buidling_texture':
+            maps = [map_item for map_item in maps if '4' not in map_item]
         map_name = random.choice(maps)
+
+    if args.edit == 'road_texture' or args.edit == 'sidewalk_texture':
+        map_name = '/Game/Carla/Maps/Town10HD_Opt'
+
+    args.map = map_name
     world = client.load_world(map_name)
     logger.info('Loaded map: %s', map_name)
     # workaround: give time to UE4 to clean memory after loading (old assets)
@@ -697,6 +750,9 @@ def main(args):
 
     # to guarantee determinism in actor positions:
     vehicle_pos_tracker = PositionTracker("vehicles") ## very slow
+    traffic_light_tracker = LightTracker("traffic_lights")
+    args.traffic_light_mapping = traffic_light_tracker.get_permutation()
+    print(args.traffic_light_mapping)
     # vehicle_pos_tracker = None
 
     ### ---------------------- main edit loop ---------------------- ###
@@ -713,9 +769,10 @@ def main(args):
             pass
             editor.set_recording_mode()
             if vehicle_pos_tracker is not None: vehicle_pos_tracker.deactivate()
+            if traffic_light_tracker is not None: traffic_light_tracker.deactivate()
             # simulate
             # TODO: any return values?
-            run(args, vehicle_positions_tracker=vehicle_pos_tracker)
+            run(args, vehicle_positions_tracker=vehicle_pos_tracker, traffic_light_tracker=traffic_light_tracker)
         else:
             pass
             # restore the random state
@@ -726,6 +783,12 @@ def main(args):
             sample_editing_operation(args)
             editor.edit()
             if vehicle_pos_tracker is not None: vehicle_pos_tracker.activate()
+
+            if args.edit == 'traffic_light_state':
+                if traffic_light_tracker is not None:
+                    traffic_light_tracker.activate()
+                else:
+                    logger.error("Traffic light tracker is not active.")
             # TODO
             # save the random state
             random_state = random.getstate()
@@ -738,8 +801,9 @@ def main(args):
             # workaround: give time to UE4 to clean memory after loading (old assets)
             # time.sleep(5)
             # print("World reloaded")
-            run(args, vehicle_positions_tracker=vehicle_pos_tracker)
+            run(args, vehicle_positions_tracker=vehicle_pos_tracker, traffic_light_tracker=traffic_light_tracker)
         if vehicle_pos_tracker is not None: vehicle_pos_tracker.reset_but_keep_record()
+        if traffic_light_tracker is not None: traffic_light_tracker.reset_but_keep_record()
 
 
 
