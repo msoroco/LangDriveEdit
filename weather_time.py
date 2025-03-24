@@ -142,6 +142,10 @@ class time_and_weather():
 
     def set_weather(self, **kwargs):
         if 'profile' in kwargs:
+            if kwargs['profile'] != 'MidRainyNoon':
+                if 'Rainy' in kwargs['profile']:
+                    # replace Rainy with Rain
+                    kwargs['profile'] = kwargs['profile'].replace('Rainy', 'Rain')
             self.world.set_weather(getattr(carla.WeatherParameters, kwargs['profile']))
             self.weather = Weather(self.world.get_weather())
             self.initial_settings = self.world.get_weather()
