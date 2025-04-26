@@ -1,9 +1,9 @@
 #!/bin/bash
 
-gpu=1
-version=l30_f10_new
+gpu=1                               # cuda_visible_device number
+version=output_dir_name             #l30_f10_new
 script=./main.py
-venv=../venv0_9_15/bin/activate
+venv=../venv0_9_15/bin/activate     # /net/acadia8a/data/msoroco/code/projects/carla/ImageEditing/../venv0_9_15/bin/activate
 output=./output_${version}
 
 
@@ -13,9 +13,9 @@ server=carla-server_${gpu}
 source $venv
 
 edit_array=(
-    # 'time_of_day'
-    # 'weather'
-    # 'weather_and_time_of_day'
+    'time_of_day'
+    'weather'
+    'weather_and_time_of_day'
     'building_texture'
     'vehicle_color'
     'vehicle_replacement'
@@ -25,15 +25,6 @@ edit_array=(
     'walker_deletion'
     'road_texture'
     'traffic_light_state'
-
-    # 'vehicle_color'
-    'traffic_light_state'
-    'vehicle_replacement'
-    # 'road_texture'
-    # 'building_texture'
-    'walker_deletion'
-    'walker_replacement'
-    'walker_color'
 )
 
 # docker run --net=host --runtime=nvidia --name carla_server_0 --gpus "device=0" --env=NVIDIA_VISIBLE_DEVICES=0 carlasim/carla:0.9.15 /bin/bash CarlaUE4.sh -quality-level=Epic -RenderOffScreen -nosound
