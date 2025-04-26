@@ -146,6 +146,7 @@ class time_and_weather():
                 if 'Rainy' in kwargs['profile']:
                     # replace Rainy with Rain
                     kwargs['profile'] = kwargs['profile'].replace('Rainy', 'Rain')
+            self.profile = kwargs['profile']
             self.world.set_weather(getattr(carla.WeatherParameters, kwargs['profile']))
             self.weather = Weather(self.world.get_weather())
             self.initial_settings = self.world.get_weather()

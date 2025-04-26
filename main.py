@@ -339,7 +339,7 @@ def spawn_walker_actors(spawn_points, walker_blueprints, num_actors=None, ego_ve
     if num_actors is None:
         num_actors = random.randint(10, 40)
         if 'walker' in args.edit:
-            num_actors = random.randint(55, 75)
+            num_actors = random.randint(55, 85)
     
     if ego_vehicle is None:
         spawn_points = []
@@ -359,7 +359,7 @@ def spawn_walker_actors(spawn_points, walker_blueprints, num_actors=None, ego_ve
                 spawn_location = world.get_random_location_from_navigation()
                 if spawn_location:
                     distance = ego_location.distance(spawn_location)
-                    if distance <= 100:  # Check if within 100 meters
+                    if distance <= 55:  # Check if within 100 meters
                         random_yaw = random.uniform(0, 360)
                         spawn_transform = carla.Transform(spawn_location, carla.Rotation(yaw=random_yaw))
                         spawn_points.append(spawn_transform)
@@ -569,8 +569,9 @@ def run(args, **kwargs):
 
     # set the weather and time of day
     weather_profile = random.choice(['ClearNoon', 'CloudyNoon', 'WetNoon', 'WetCloudyNoon', 'SoftRainNoon', 'MidRainyNoon', 'HardRainNoon', 'ClearSunset', 'CloudySunset', 'WetSunset', 'WetCloudySunset', 'SoftRainSunset', 'MidRainSunset', 'HardRainSunset'])
-    args.weather_profile = weather_profile
     time_and_weather_instance = set_weather_and_time_of_day(profile=weather_profile)
+    # args.weather_profile = weather_profile
+    args.weather_profile = time_and_weather_instance.profile
 
 
     # set the NPC actors (random if no edits are specified).
