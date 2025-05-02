@@ -4,6 +4,12 @@ import numpy as np
 import math
 import random
 
+import random
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+
+from pdb import set_trace as st
+
 def create_video_from_images(image_folder, output_dir, fps=30, savetype='mp4', levels=3):
     """
     Create a
@@ -211,3 +217,83 @@ def synthesize_texture(input_image, output_size, window_size):
             output_image[y, x] = input_image[best_match[1], best_match[0]]
 
     return output_image
+
+
+from PIL import Image, ImageDraw, ImageFont
+import numpy as np, random
+
+def overlay_instances( 
+    image: Image.Image,
+    instance_map: np.ndarray,
+    actor_names: dict = None,
+    interesting_instances: list = None,
+    alpha: float = 0.5,
+    font: ImageFont.ImageFont = None
+) -> Image.Image:
+    # ensure we have RGBA for blending
+    base    = image.convert("RGBA")
+    overlay = base.copy()
+    draw    = ImageDraw.Draw(overlay)
+
+    H, W = instance_map.shape
+    if font is None:
+        font = ImageFont.load_default()
+
+    for inst_id in np.unique(instance_map):
+        if interesting_instances is not None and inst_id not in interesting_instances:
+            continue
+        
+        if inst_id == 0:
+            continue
+
+        # 1) deterministic “random” color
+        rnd       = random.Random(int(inst_id))
+        color_rgb = (rnd.randint(0,255), rnd.randint(0,255), rnd.randint(0,255))
+        mask_alpha= int(255 * alpha)
+
+        # 2) mask → RGBA
+        mask     = (instance_map == inst_id)
+        mask_pil = Image.fromarray((mask * mask_alpha).astype("uint8"), mode="L")
+        color_img= Image.new("RGBA", (W, H), color_rgb + (0,))
+        color_img.putalpha(mask_pil)
+
+        # 3) composite
+        overlay  = Image.alpha_composite(overlay, color_img)
+        draw     = ImageDraw.Draw(overlay)
+
+        # 4) bounding box
+        ys, xs = np.where(mask)
+        y0, y1 = int(ys.min()), int(ys.max())
+        x0, x1 = int(xs.min()), int(xs.max())
+
+        # 5) draw the box
+        draw.rectangle(
+            [(x0, y0), (x1, y1)],
+            outline=color_rgb + (255,),
+            width=2
+        )
+
+        # 6) get the text size in a way that works
+        label = actor_names.get(inst_id, str(inst_id)) if actor_names else str(inst_id)
+        try:
+            # Pillow <8.0 (if your build still had it)
+            text_w, text_h = draw.textsize(label, font=font)
+        except AttributeError:
+            # fallback: ask the font
+            # text_w, text_h = font.getsize(label)
+            bbox = font.getbbox(label)
+            text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+            # or for even better metrics on Pillow >=8.0:
+            # bbox = draw.textbbox((0,0), label, font=font)
+            # text_w = bbox[2] - bbox[0]
+            # text_h = bbox[3] - bbox[1]
+
+        # background rect just above the box
+        text_bg = [(x0, max(y0-text_h-4, 0)), (x0+text_w+4, y0)]
+        draw.rectangle(text_bg, fill=color_rgb + (200,))
+
+        # draw the label
+        draw.text((x0+2, y0-text_h-2), label, fill=(255,255,255,255), font=font)
+
+    return overlay.convert("RGB")

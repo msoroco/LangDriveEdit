@@ -17,9 +17,11 @@ from IPython.display import display
 import argparse
 
 from weather_time import time_and_weather
-from utils import create_video_from_images
+from utils import create_video_from_images, overlay_instances
 from track_metadata import MetadataTracker_simple, PositionTracker, LightTracker #MetadataTracker
 from editor import Editor
+
+from pdb import set_trace as st
 
 world = None
 client = None
@@ -132,6 +134,11 @@ def attach_sensor(vehicle, sensor_type, height=1.75, fps=1.0, attachement_type=c
         camera_init_trans = carla.Transform(carla.Location(z=height, x=x_value, y=y_value), carla.Rotation(yaw=60*i))
         # create the camera through a blueprint that defines its properties
         camera_bp = world.get_blueprint_library().find(sensor_type)
+        # for semantic and instance sensors, grab raw 32-bit data
+        
+        # if 'segmentation' in sensor_type:
+        #     camera_bp.set_attribute('format', 'Raw')
+        
         # set the time in seconds between sensor captures
         camera_bp.set_attribute('sensor_tick', str(round(1/fps, 5)))
         camera_bp.set_attribute('role_name', role)
@@ -176,6 +183,34 @@ def activate_sensors(sensors, sensor_queues, output_dir=None, tracker=None):
             # sensor_view.listen(lambda image, st=sensor_type, r=role, o=output_dir: save_to_disk(image, st, r, o))
             logger.debug('Activated %s sensor: %s', sensor_type, sensor_view)
 
+
+def build_instance2semantic_majority(semantic_map: np.ndarray,
+                                     instance_id_map: np.ndarray):
+    """
+    Map each non‑zero instance ID → the semantic ID that occurs most
+    frequently within its mask.
+    """
+    mapping = {}
+    # 1. gather all instance IDs (skip background 0)
+    instance_ids = np.unique(instance_id_map)
+    instance_ids = instance_ids[instance_ids != 0]
+
+    for inst_id in instance_ids:
+        # 2. mask out pixels belonging to this instance
+        mask = (instance_id_map == inst_id)
+        sem_vals = semantic_map[mask]  # flat array of semantic IDs under that instance
+
+        # 3. count occurrences of each semantic ID
+        labels, counts = np.unique(sem_vals, return_counts=True)
+        print(f'Instance ID: {inst_id}, Labels: {labels}, Counts: {counts}')
+        # 4. pick the label with the maximum count
+        majority_sem = labels[np.argmax(counts)]
+
+        mapping[int(inst_id)] = int(majority_sem)
+
+    return mapping
+
+
 def save_images_from_queues(sensor_queues, output_dir, tracker, frame_id):
     """Reads images from the sensor queues and saves them to disk.
         `sensor_queues` is a dictionary of queues where each key is a sensor type and the value is a dictionary of queues to hold the images from the sensor.
@@ -190,23 +225,124 @@ def save_images_from_queues(sensor_queues, output_dir, tracker, frame_id):
         else:
             image.save_to_disk(path, cc)
         logger.verbose_debug(f'Saved image to disk: {name}')
+        
+        return path
 
     frames_saved = []
+    # for sensor_type, queue_dict in sensor_queues.items():
+    #     sensor_directory = os.path.join(output_dir, sensor_type)
+    #     os.makedirs(sensor_directory, exist_ok=True)
+    #     for role, sensor_queue in queue_dict.items():
+    #         sensor_view_subdirectory = os.path.join(sensor_directory, role)
+    #         os.makedirs(sensor_view_subdirectory, exist_ok=True)
+    #         while not sensor_queue.empty():
+    #             image = sensor_queue.get()
+    #             # if sensor_type == 'sensor.camera.depth' : ## visualize the output
+    #             #     cc = carla.ColorConverter.Depth
+    #             #     save_to_disk(image, sensor_type, role, sensor_view_subdirectory, cc)
+    #             #     continue
+    #             save_to_disk(image, sensor_type, role, sensor_view_subdirectory)  
+    #             if image.frame not in frames_saved:
+    #                 frames_saved.append(image.frame)
+    
+    bp_lib = world.get_blueprint_library()
+    spawn_points = world.get_map().get_spawn_points() # spawn points may be occupied already
+    vehicle_blueprints = bp_lib.filter('*vehicle*')
+    walker_blueprints = bp_lib.filter('*walker*')
+    
     for sensor_type, queue_dict in sensor_queues.items():
         sensor_directory = os.path.join(output_dir, sensor_type)
         os.makedirs(sensor_directory, exist_ok=True)
+
         for role, sensor_queue in queue_dict.items():
-            sensor_view_subdirectory = os.path.join(sensor_directory, role)
-            os.makedirs(sensor_view_subdirectory, exist_ok=True)
+            role_dir = os.path.join(sensor_directory, role)
+            os.makedirs(role_dir, exist_ok=True)
+
             while not sensor_queue.empty():
                 image = sensor_queue.get()
-                # if sensor_type == 'sensor.camera.depth' : ## visualize the output
-                #     cc = carla.ColorConverter.Depth
-                #     save_to_disk(image, sensor_type, role, sensor_view_subdirectory, cc)
-                #     continue
-                save_to_disk(image, sensor_type, role, sensor_view_subdirectory)  
+                rgb_path = save_to_disk(image, sensor_type, role, role_dir)
                 if image.frame not in frames_saved:
                     frames_saved.append(image.frame)
+                    
+                if sensor_type == 'sensor.camera.instance_segmentation':
+                    # 1. Interpret raw_data as a flat uint8 array
+                    array = np.frombuffer(image.raw_data, dtype=np.uint8)
+                    # 2. Reshape to H×W×4 (BGRA)
+                    array = array.reshape((image.height, image.width, 4))
+                    # 3. Drop alpha and convert BGR → RGB
+                    rgb = array[:, :, :3][:, :, ::-1]
+                    # Now rgb[y,x] is [R, G, B]:
+                    #   R = semantic class, G = low‐order byte of instance ID, B = high‐order byte
+
+                    # (Optional) extract semantic tag map
+                    semantic_map = rgb[:, :, 0]
+
+                    # (Optional) reconstruct 16‐bit instance ID
+                    instance_low  = rgb[:, :, 1].astype(np.uint16)
+                    instance_high = rgb[:, :, 2].astype(np.uint16)
+                    instance_id_map = instance_low + (instance_high << 8)
+
+                    # 4) save the full maps if you like
+                    np.save(os.path.join(role_dir, f'{image.frame:06d}_inst_map.npy'), instance_id_map)
+                    np.save(os.path.join(role_dir, f'{image.frame:06d}_sem_map.npy'), semantic_map)
+
+                    # 5) visualize the instance mask 
+                    # rgb_path = os.path.join(output_dir, "sensor.camera.rgb", role, f'sensor.camera.rgb_{role}_{image.frame:06d}.png')
+                    # rgb_path = os.path.join(role_dir, 'sensor.camera.rgb', role, f'rgb_{role}_{image.frame:06d}.png')
+                    rgb = Image.open(rgb_path)
+                    
+                    arr = rgb
+                    for instance_id in np.unique(instance_id_map):
+                        # semantic_id = instance2semantic[instance_id]
+                        
+                        actor = world.get_actor(int(instance_id))
+                        if actor is not None:
+                            actor_type = actor.type_id
+                            print(f'Actor ID: {instance_id}, Actor Type: {actor_type}')
+                        else:
+                            print(f'Actor ID: {instance_id} not found in the world.')
+                    
+                    
+                    instance2semantic = {}
+                    instance2semantic = build_instance2semantic_majority(semantic_map, instance_id_map)
+                    
+                    interesting_semantic_classes = [12, 14]
+                    interesting_instances = [inst_id for inst_id, sem_id in instance2semantic.items() if sem_id in interesting_semantic_classes]
+                    st()
+                    actor_names = {}
+                    for inst_id in interesting_instances:
+                        actor = world.get_actor(int(inst_id))
+                        if actor is not None:
+                            actor_type = actor.type_id
+                            actor_names[inst_id] = actor_type
+                        else:
+                            actor_names[inst_id] = inst_id
+                    
+                    overlayed = overlay_instances(rgb, instance_id_map, 
+                                                  interesting_instances=interesting_instances,
+                                                  actor_names=actor_names,
+                                                  alpha=0.0)
+                    # save:
+                    overlay_dir = os.path.join(role_dir, 'overlays')
+                    os.makedirs(overlay_dir, exist_ok=True)
+                    overlayed.save(os.path.join(overlay_dir, f'{image.frame:06d}_overlay.png'))
+                    st()
+                    
+                    # inst_dir = os.path.join(role_dir, 'instance_masks')
+                    # os.makedirs(inst_dir, exist_ok=True)
+                    # for inst_id, mask in masks.items():
+                    #     mask_img = Image.fromarray((mask * 255).astype(np.uint8))
+                    #     mask_img.save(os.path.join(inst_dir, f'{image.frame:06d}_actor_{inst_id:04d}.png'))
+
+                    # 6) record in your tracker
+                    # if tracker is not None:
+                    #     tracker.track_instances(image.frame, masks)
+
+                    continue
+
+                
+
+    
     return frames_saved          
                 
 
@@ -560,7 +696,13 @@ def run(args, **kwargs):
     ego_sensors = {} # Each key is a sensor type, and the value is a dictionary of sensors representing a 360 view. Use the `role_name` attribute to distinguish between them.
     ego_sensor_queues = {} # Each key is a sensor type, and the value is a dictionary of queues to hold the images from the sensor.
     # TODO: add the other sensors
-    for sensor in ['sensor.camera.rgb', 'sensor.camera.semantic_segmentation', 'sensor.camera.depth']:
+    # for sensor in ['sensor.camera.rgb', 'sensor.camera.semantic_segmentation', 'sensor.camera.depth']:
+    for sensor in [
+        'sensor.camera.rgb',
+        'sensor.camera.semantic_segmentation',
+        'sensor.camera.depth',
+        'sensor.camera.instance_segmentation' 
+    ]:
         sensors_360, queues_360 = attach_sensor(ego_vehicle, sensor, height=1.75, fps=args.fps)
         ego_sensors[sensor] = sensors_360
         ego_sensor_queues[sensor] = queues_360
@@ -722,6 +864,10 @@ def main(args):
         logger.info('Using traffic manager port: %s', args.tm_port)
     global world, client, editor
     client = carla.Client(args.host, int(args.port))
+    
+    # print("Client (Python API) version:", carla.__version__)
+    print("Server version:           ", client.get_server_version())
+    
     client.set_timeout(60.0) 
     world = client.get_world()
     editor = Editor(world, args, client)
@@ -805,8 +951,6 @@ def main(args):
             run(args, vehicle_positions_tracker=vehicle_pos_tracker, traffic_light_tracker=traffic_light_tracker)
         if vehicle_pos_tracker is not None: vehicle_pos_tracker.reset_but_keep_record()
         if traffic_light_tracker is not None: traffic_light_tracker.reset_but_keep_record()
-
-
 
         create_video_from_images(f"{args.run_output_dir}/sensor.camera.rgb/front", args.output, fps=args.fps)
         logger.info('Created video from images.')

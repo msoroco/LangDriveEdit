@@ -177,3 +177,5 @@ cython_debug/
 ## output path
 out/
 debugging/
+
+output_output_dir_name/
