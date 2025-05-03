@@ -1,10 +1,10 @@
 #!/bin/bash
 
-gpu=0                               # cuda_visible_device number
-version=output_dir_name             
-script=./main.py
+gpu=3                               # cuda_visible_device number
+version=testing_new_metadata            
+script=/net/acadia8a/data/msoroco/code/projects/carla/ImageEditing/main.py
 venv=/net/acadia8a/data/msoroco/code/projects/carla/venv38/bin/activate
-output=./output_${version}
+output=/net/acadia8a/data/msoroco/code/projects/carla/ImageEditing/output_${version}
 server=carla-server_${gpu}
 
 
@@ -15,14 +15,14 @@ edit_array=(
     # 'weather'
     # 'weather_and_time_of_day'
     # 'building_texture'
-    # 'vehicle_color'
-    # 'vehicle_replacement'
-    # 'vehicle_deletion'
-    # 'walker_color'
+    'vehicle_color'
+    'vehicle_replacement'
+    'vehicle_deletion'
+    'walker_color'
     'walker_replacement'
-    # 'walker_deletion'
+    'walker_deletion'
     # 'road_texture'
-    # 'traffic_light_state'
+    'traffic_light_state'
 )
 
 # docker run --net=host --runtime=nvidia --name carla_server_0 --gpus "device=0" --env=NVIDIA_VISIBLE_DEVICES=0 carlasim/carla:0.9.15 /bin/bash CarlaUE4.sh -quality-level=Epic -RenderOffScreen -nosound
@@ -66,7 +66,7 @@ do
         edit=$(shuf -n1 -e "${edit_array[@]}")
         echo =====================================================================
         echo "Editing $edit"
-        if ! python3 $script --edit $edit --length 30 --fps 10 --port $host_port1 --tm_port $host_port_tm --output $output; then
+        if ! python3 $script --edit $edit --length 30 --fps 5 --port $host_port1 --tm_port $host_port_tm --output $output; then
             echo "Error occurred while editing $edit"
             continue 2  # Exit the inner for loop and start a new iteration of the while loop
         fi

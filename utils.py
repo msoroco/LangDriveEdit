@@ -225,6 +225,7 @@ import numpy as np, random
 def overlay_instances( 
     image: Image.Image,
     instance_map: np.ndarray,
+    semantic_map: np.ndarray = None,
     actor_names: dict = None,
     interesting_instances: list = None,
     alpha: float = 0.5,
@@ -240,7 +241,7 @@ def overlay_instances(
         font = ImageFont.load_default()
 
     for inst_id in np.unique(instance_map):
-        if interesting_instances is not None and inst_id not in interesting_instances:
+        if interesting_instances is not None and inst_id not in interesting_instances.keys():
             continue
         
         if inst_id == 0:
@@ -253,6 +254,10 @@ def overlay_instances(
 
         # 2) mask → RGBA
         mask     = (instance_map == inst_id)
+        # we added traffic lights to the instance map, but we don't want the pole.
+        if interesting_instances[inst_id] == 7:
+            mask = np.logical_and(mask, semantic_map == 7)
+
         mask_pil = Image.fromarray((mask * mask_alpha).astype("uint8"), mode="L")
         color_img= Image.new("RGBA", (W, H), color_rgb + (0,))
         color_img.putalpha(mask_pil)
@@ -274,7 +279,7 @@ def overlay_instances(
         )
 
         # 6) get the text size in a way that works
-        label = actor_names.get(inst_id, str(inst_id)) if actor_names else str(inst_id)
+        label = str(actor_names.get(inst_id, str(inst_id))) if actor_names else str(inst_id)
         try:
             # Pillow <8.0 (if your build still had it)
             text_w, text_h = draw.textsize(label, font=font)
@@ -297,3 +302,27 @@ def overlay_instances(
         draw.text((x0+2, y0-text_h-2), label, fill=(255,255,255,255), font=font)
 
     return overlay.convert("RGB")
+
+
+def get_instance_bounding_boxes(instance_map: np.ndarray, interesting_instances: dict, semantic_map = None) -> list:
+    """
+    Returns a dictionary of bounding boxes for each instance in interesting_instances.
+    Each key is the instance_id, and the value is a tuple: (x0, y0, x1, y1)
+    """
+    bboxes = {}
+    for inst_id in np.unique(instance_map):
+        if interesting_instances is not None and inst_id not in interesting_instances.keys():
+            continue
+        if inst_id == 0:
+            continue
+        mask = (instance_map == inst_id)
+        # we added traffic lights to the instance map, but we don't want the pole.
+        if semantic_map is not None and interesting_instances[inst_id] == 7:
+            mask = np.logical_and(mask, semantic_map == 7)
+        ys, xs = np.where(mask)
+        if ys.size == 0 or xs.size == 0:
+            continue
+        y0, y1 = int(ys.min()), int(ys.max())
+        x0, x1 = int(xs.min()), int(xs.max())
+        bboxes[inst_id] = (x0, y0, x1, y1)
+    return bboxes
