@@ -266,10 +266,14 @@ def overlay_instances(
         overlay  = Image.alpha_composite(overlay, color_img)
         draw     = ImageDraw.Draw(overlay)
 
-        # 4) bounding box
-        ys, xs = np.where(mask)
-        y0, y1 = int(ys.min()), int(ys.max())
-        x0, x1 = int(xs.min()), int(xs.max())
+        try:
+            # 4) bounding box
+            ys, xs = np.where(mask)
+            y0, y1 = int(ys.min()), int(ys.max())
+            x0, x1 = int(xs.min()), int(xs.max())
+        except:
+            # bounding box may be too small for some far traffic lights for example
+            continue
 
         # 5) draw the box
         draw.rectangle(
@@ -279,7 +283,7 @@ def overlay_instances(
         )
 
         # 6) get the text size in a way that works
-        label = str(actor_names.get(inst_id, str(inst_id))) if actor_names else str(inst_id)
+        label = (str(inst_id) + " " + str(interesting_instances[inst_id])  + " " + str(actor_names.get(inst_id, str(inst_id)))) if actor_names else str(inst_id)
         try:
             # Pillow <8.0 (if your build still had it)
             text_w, text_h = draw.textsize(label, font=font)
