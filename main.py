@@ -218,9 +218,9 @@ def build_instance2semantic_majority(semantic_map: np.ndarray,
             else:
                 # if not, set it to 0
                 logger.verbose_debug(f'Instance ID: {inst_id} is not a traffic light.')
-                mapping[int(inst_id)] = 0
 
-        mapping[int(inst_id)] = int(majority_sem)
+        else:
+            mapping[int(inst_id)] = int(majority_sem)
 
     return mapping
 
@@ -331,8 +331,8 @@ def save_images_from_queues(sensor_queues, output_dir, tracker, frame_id):
                         instance2semantic = {}
                         instance2semantic = build_instance2semantic_majority(semantic_map, instance_id_map)
                         
-                        # 12: pedestrians, 13: Drivers, 14: vehicles, 15: trucks, 7: traffic lights, 18: motorcycles
-                        interesting_semantic_classes = [12, 13, 14, 7, 15, 18]
+                        # 12: pedestrians, 13: Drivers, 14: vehicles, 15: trucks, 16: bus, 7: traffic lights, 18: motorcycles
+                        interesting_semantic_classes = [12, 13, 14, 7, 15, 16, 18, 19, 17]
                         interesting_instances = {inst_id: sem_id for inst_id, sem_id in instance2semantic.items() if sem_id in interesting_semantic_classes}
                         # st()
                         actor_names = {}
