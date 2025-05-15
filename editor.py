@@ -128,6 +128,7 @@ class Editor():
                         rotation = edit['rotation']
                         # TODO: height and width
                         self.apply_texture(road_object, road_texture, rotate=rotation)
+                    return edits
             elif key == 'sidewalk_texture':    
                 if getattr(self.args, 'sidewalk_texture', False):
                     edits = self.edits_to_insert['sidewalk_texture']

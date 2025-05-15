@@ -454,7 +454,7 @@ def spawn_vehicle_actors(spawn_points, vehicle_blueprints, num_actors=None, posi
             color_string = f"{r},{g},{b}"
             vehicle_colors.append(color_string)
         else:  
-            vehicle_colors.append(None)
+            vehicle_colors.append("0,0,0")
 
 
     dict = editor.apply('npc_vehicles', {'vehicle_names': vehicle_names, 'spawn_points': spawn_points, 'vehicle_colors': vehicle_colors})
@@ -629,7 +629,14 @@ def add_texture_to_roads():
     # road_texture_dir = os.path.join('textures', 'road')
     # texture_files = os.listdir(road_texture_dir)
     editor.record('road_texture', {'roads': filtered_names})
-    editor.apply('road_texture', {'roads': filtered_names})
+    road_texture_dicts = editor.apply('road_texture', {'roads': filtered_names})
+
+    if not editor.recording_mode and args.edit == 'road_texture': # edit applied otherwise
+        # because we change all roads to the same texture, just take the first one:
+        road_texture_dict = road_texture_dicts[0]
+        texture = road_texture_dict['texture']
+
+        args.road_texture = texture
 
     # for name in filtered_names:
     #     texture = random.choice(texture_files)
@@ -910,12 +917,15 @@ def main(args):
     
     # print("Client (Python API) version:", carla.__version__)
     print("Server version:           ", client.get_server_version())
+    print("ports (host, port): ", args.host, args.port)
     
     client.set_timeout(60.0) 
     world = client.get_world()
     editor = Editor(world, args, client)
 
     maps = client.get_available_maps()
+    print("Available maps: ", maps, len(maps))
+    exit(0)
     logger.debug('Available maps: %s', maps)
     if args.map:
         map_name = args.map
