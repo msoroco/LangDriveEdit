@@ -3,9 +3,12 @@
 
 # Code organization
 
-The Synthetic data creation is in the `new_metadata` branch.
-
-The chat_GPT prompts and mask creation for real-world data is in the `main` branch
+| Branch              | Purpose                                      |
+|---------------------|----------------------------------------------|
+| `main`              | The chat_GPT prompts and mask creation for real-world data     |
+| `realworld_metadata`| The Synthetic data creation       |
+| `training_ue`| Training code for Ultra Edit experiments          |
+| `training_ip2p`               | Training code for Instruct Pix 2 Pix experiments      |
 
 ---
 
