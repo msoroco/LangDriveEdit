@@ -1,0 +1,8 @@
+{
+    "zero_optimization": {
+        "stage": 2,
+        "contiguous_gradients": true,
+        "overlap_comm": true,
+        "round_robin_gradients": true
+    }
+}
