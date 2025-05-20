@@ -1,0 +1,127 @@
+# File modified by authors of InstructPix2Pix from original (https://github.com/CompVis/stable-diffusion).
+# See more details in LICENSE.
+
+model:
+  base_learning_rate: 1.0e-04
+  target: ldm.models.diffusion.ddpm_edit.LatentDiffusion
+  params:
+    ckpt_path: /net/acadia8a/data/msoroco/code/projects/instruct/instruct-pix2pix/checkpoints/instruct-pix2pix-00-22000.ckpt
+    # ckpt_path: stable_diffusion/models/ldm/stable-diffusion-v1/v1-5-pruned-emaonly.ckpt
+    linear_start: 0.00085
+    linear_end: 0.0120
+    num_timesteps_cond: 1
+    log_every_t: 200
+    timesteps: 1000
+    first_stage_key: edited
+    cond_stage_key: edit
+    image_size: 32 ## I override this to match the conditioning dimensions
+    channels: 4
+    cond_stage_trainable: false   # Note: different from the one we trained before
+    conditioning_key: hybrid
+    monitor: val/loss_simple_ema
+    scale_factor: 0.18215
+    use_ema: true
+    load_ema: false
+
+    scheduler_config: # 10000 warmup steps
+      target: ldm.lr_scheduler.LambdaLinearScheduler
+      params:
+        warm_up_steps: [ 0 ]
+        cycle_lengths: [ 10000000000000 ] # incredibly large number to prevent corner cases
+        f_start: [ 1.e-6 ]
+        f_max: [ 1. ]
+        f_min: [ 1. ]
+
+    unet_config:
+      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      params:
+        image_size: 32 # unused
+        in_channels: 12  # Changed from 8 to 12 to accommodate mask
+        out_channels: 4
+        model_channels: 320
+        attention_resolutions: [ 4, 2, 1 ]
+        num_res_blocks: 2
+        channel_mult: [ 1, 2, 4, 4 ]
+        num_heads: 8
+        use_spatial_transformer: True
+        transformer_depth: 1
+        context_dim: 768
+        use_checkpoint: True
+        legacy: False
+
+    first_stage_config:
+      target: ldm.models.autoencoder.AutoencoderKL
+      params:
+        embed_dim: 4
+        monitor: val/rec_loss
+        ddconfig:
+          double_z: true
+          z_channels: 4
+          resolution: 256
+          in_channels: 3
+          out_ch: 3
+          ch: 128
+          ch_mult:
+          - 1
+          - 2
+          - 4
+          - 4
+          num_res_blocks: 2
+          attn_resolutions: []
+          dropout: 0.0
+        lossconfig:
+          target: torch.nn.Identity
+
+    cond_stage_config:
+      target: ldm.modules.encoders.modules.FrozenCLIPEmbedder
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 8
+    num_workers: 4
+    train:
+      target: edit_dataset.CarlaBoreasSimpleDataset
+      params:
+        parquet_path:
+          -  /net/acadia8a/data/msoroco/code/projects/ultraedit/chatGPT_masks/output_full_2/Boreas_with_paths_paired_train_simple_prompts_dataset_with_masks_large.parquet
+        split: train
+        image_0_col: source_image
+        image_1_col: edited_image
+        prompt_col: edit_prompt
+        mask_col: mask_image
+        do_mask: true
+        resolution: [640, 320]
+        center_crop: false
+        random_flip: false
+        seed: 3345
+    validation:
+      target: edit_dataset.CarlaBoreasSimpleDataset
+      params:
+        parquet_path:
+          -  /net/acadia8a/data/msoroco/code/projects/ultraedit/chatGPT_masks/output_full_2/Boreas_with_paths_paired_train_simple_prompts_dataset_with_masks_large.parquet
+        split: validation
+        image_0_col: source_image
+        image_1_col: edited_image
+        prompt_col: edit_prompt
+        mask_col: mask_image
+        do_mask: true
+        resolution: [640, 320]
+        center_crop: false
+        random_flip: false
+        seed: 3345
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        batch_frequency: 2000
+        max_images: 2
+        increase_log_steps: False
+
+  trainer:
+    max_epochs: 5
+    benchmark: True
+    accumulate_grad_batches: 4
+    check_val_every_n_epoch: 4
