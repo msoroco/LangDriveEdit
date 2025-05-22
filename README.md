@@ -21,7 +21,7 @@ conda env create -f environment.yaml
 conda activate ip2p
 bash scripts/download_checkpoints.sh
 ```
-## Train on Autonomous Driving Scenes:
+## Train on Driving Scenes:
 ```
 world_size=8
 
