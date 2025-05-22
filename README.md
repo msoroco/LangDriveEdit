@@ -22,6 +22,11 @@ conda activate ip2p
 bash scripts/download_checkpoints.sh
 ```
 ## Train on Driving Scenes:
+install the datasets following the instructions on the `main` branch.
+
+Update the paths to the datasets in `configs/train_two_masks.yaml`.
+
+Run:
 ```
 world_size=8
 
