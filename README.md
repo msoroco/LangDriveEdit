@@ -25,3 +25,12 @@ aws s3 cp s3://lang-drive-edit/synthetic_train synthetic_train --recursive --no-
 ```
 aws s3 cp s3://lang-drive-edit/synthetic_test synthetic_test --recursive --no-sign-request
 ```
+## download realistic train set
+```
+aws s3 cp s3://lang-drive-edit/boreas_train boreas_train --recursive --no-sign-request
+```
+
+## download realistic test set
+```
+aws s3 cp s3://lang-drive-edit/boreas_test boreas_test --recursive --no-sign-request
+```
