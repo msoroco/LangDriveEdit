@@ -15,12 +15,21 @@ PyTorch implementation of InstructPix2Pix, an instruction-based image editing mo
 
 Follow the instructions below to download and run InstructPix2Pix on your own images. These instructions have been tested on a GPU with >18GB VRAM. If you don't have a GPU, you may need to change the default configuration, or check out [other ways of using the model](https://github.com/timothybrooks/instruct-pix2pix#other-ways-of-using-instructpix2pix). 
 
-### Set up a conda environment, and download a pretrained model:
+## Set up a conda environment, and download a pretrained model:
 ```
 conda env create -f environment.yaml
 conda activate ip2p
 bash scripts/download_checkpoints.sh
 ```
+## Train on Autonomous Driving Scenes:
+```
+world_size=8
+
+python main.py --name "two_masks" --base configs/train_two_masks.yaml --train --gpus $(seq -s, 0 $((world_size - 1)))
+```
+
+---
+
 
 ### Edit a single image:
 ```
