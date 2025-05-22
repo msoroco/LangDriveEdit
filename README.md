@@ -47,6 +47,16 @@ pip install -r requirements
 cd diffusers && pip install -e .
 ```
 
+## Training on Autonomous Driving Scenes:
+Install the datasets following the instructions on the `main` branch, then:
+```
+bash scripts/run.sh
+```
+
+
+---
+
+
 ### Training with stable-diffusion3
 
 **Stage 1: Free-form image editing**
